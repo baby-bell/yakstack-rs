@@ -22,7 +22,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                       .subcommand(SubCommand::with_name("clear")
                           .about("Clear all tasks"))
                       .get_matches();
-    let conn = Connection::open("/tmp/yakstack.db")
+    let mut db_path = std::env::temp_dir();
+    db_path.push("yakstack.db");
+    let conn = Connection::open(db_path)
                           .map_err(|e| format!("unable to open yakstack database: {}", e))?;
     conn.execute("CREATE TABLE IF NOT EXISTS tasks(task TEXT NOT NULL, task_order INTEGER PRIMARY KEY)", [])?;
     match matches.subcommand() {
