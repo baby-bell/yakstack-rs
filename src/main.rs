@@ -1,14 +1,16 @@
 use std::error::Error;
+use std::mem;
 
 use rusqlite::{Connection, OptionalExtension};
 use rusqlite::params;
 use rusqlite::Result as RusqliteResult;
-use clap::{Arg, App, SubCommand};
+use clap::{Arg, App, SubCommand, AppSettings};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let matches = App::new("yakstack")
                       .version("0.1")
                       .about("yak-shaving stack")
+                      .setting(AppSettings::SubcommandRequiredElseHelp)
                       .subcommand(SubCommand::with_name("push")
                           .about("Push a task onto the stack")
                           .arg(Arg::with_name("TASK")
@@ -26,7 +28,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     db_path.push("yakstack.db");
     let conn = Connection::open(db_path)
                           .map_err(|e| format!("unable to open yakstack database: {}", e))?;
-    conn.execute("CREATE TABLE IF NOT EXISTS tasks(task TEXT NOT NULL, task_order INTEGER PRIMARY KEY)", [])?;
+    conn.execute("CREATE TABLE IF NOT EXISTS tasks(task TEXT NOT NULL, task_order INTEGER PRIMARY KEY AUTOINCREMENT)", [])?;
     match matches.subcommand() {
         ("push", submatches) => {
             let task = submatches.unwrap().value_of("TASK").unwrap();
@@ -36,29 +38,24 @@ fn main() -> Result<(), Box<dyn Error>> {
             if let Some(task) = pop_task(&conn)? {
                 println!("{} ✔️", task);
             } else {
-                println!("No tasks!");
-                std::process::exit(1);
+                return Err("No tasks to pop!".into());
             }
         }
         ("clear", _) => clear_tasks(&conn)?,
-        ("ls", _) => list_tasks(&conn)?.iter().enumerate().for_each(|(i, task)| println!("{}. {}", i, task)),
-        _ => {
-            eprintln!("Must specify a subcommand: push, pop, ls, clear");
-            std::process::exit(1);
+        ("ls", _) => {
+            let tasks = list_tasks(&conn)?;
+            tasks.iter().enumerate().for_each(|(i, task)| println!("{}. {}", i, task));
+            // let OS clean up after us
+            mem::forget(tasks);
         }
+        _ => unreachable!("No subcommand provided")
     }
     Ok(())
 }
 
 fn push_task(db: &Connection, task: String) -> RusqliteResult<usize> {
-    // TODO: encode into a single sql statement
-    let number_of_tasks: i64 = db.query_row("SELECT count(*) FROM tasks", [], |row| row.get(0))?;
-    let order = if number_of_tasks == 0 {
-        0
-    } else {
-        db.query_row("SELECT max(task_order) + 1 FROM tasks", [], |row| row.get(0))?
-    };
-    db.execute("INSERT INTO tasks(task, task_order) VALUES (?, ?)", params![task, order])
+    // https://sqlite.org/autoinc.html
+    db.execute("INSERT INTO tasks(task) VALUES (?)", params![task])
 }
 
 fn pop_task(db: &Connection) -> RusqliteResult<Option<String>> {
