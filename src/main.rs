@@ -34,6 +34,18 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .takes_value(true)))
         .subcommand(SubCommand::with_name("ls")
             .about("List all tasks"))
+        .subcommand(SubCommand::with_name("swap")
+            .about("Swap two tasks")
+            .arg(Arg::with_name("TASK1")
+                .help("first task")
+                .required(true)
+                .takes_value(true)
+                .validator(is_u64))
+            .arg(Arg::with_name("TASK2")
+                .help("second task")
+                .required(true)
+                .takes_value(true)
+                .validator(is_u64)))
         .subcommand(SubCommand::with_name("clear")
             .about("Clear all tasks on the current stack"))
         .subcommand(SubCommand::with_name("clearall")
@@ -86,6 +98,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                 return Err("No tasks!".into());
             }
         }
+        ("swap", submatches) => {
+            let submatches = submatches.unwrap();
+            let task1: u64 = submatches.value_of("TASK1").unwrap().parse().unwrap();
+            let task2: u64 = submatches.value_of("TASK2").unwrap().parse().unwrap();
+            swap_tasks(&mut conn, task1, task2)?;
+        }
         ("clear", _) => clear_tasks(&conn)?,
         ("clearall", _) => clear_all_tasks(&conn)?,
         ("ls", _) => {
@@ -109,6 +127,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         _ => unreachable!("No subcommand provided")
     }
+    Ok(())
+}
+
+fn is_u64(arg: String) -> Result<(), String> {
+    let _: u64 = arg.parse().map_err(|e| format!("{} is not a valid unsigned number: {}", arg, e))?;
     Ok(())
 }
 
