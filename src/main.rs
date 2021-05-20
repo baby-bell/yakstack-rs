@@ -1,5 +1,4 @@
-use core::num;
-use std::{error::Error, future::get_context};
+use std::error::Error;
 use std::cmp;
 
 use rusqlite::{Connection, OptionalExtension, named_params};
@@ -124,7 +123,8 @@ fn init_db(db: &mut Connection) -> RusqliteResult<()> {
     tx.execute("PRAGMA foreign_keys = ON", [])?;
     tx.execute("CREATE TABLE IF NOT EXISTS stacks(id INTEGER PRIMARY KEY, name TEXT NOT NULL, UNIQUE(name))", [])?;
     tx.execute("CREATE TABLE IF NOT EXISTS app_state(stack_id INTEGER NOT NULL, FOREIGN KEY(stack_id) REFERENCES stacks(id))", [])?;
-    tx.execute("CREATE TABLE IF NOT EXISTS tasks(task TEXT NOT NULL, task_order REAL NOT NULL, id INTEGER PRIMARY KEY, stack_id INTEGER NOT NULL, FOREIGN KEY(stack_id) REFERENCES stacks(id), CHECK (task_order = task_order))", [])?;
+    tx.execute("CREATE TABLE IF NOT EXISTS tasks(task TEXT NOT NULL, task_order INTEGER NOT NULL, id INTEGER PRIMARY KEY, stack_id INTEGER NOT NULL, FOREIGN KEY(stack_id) REFERENCES stacks(id), CHECK (task_order = task_order))", [])?;
+    tx.execute("CREATE INDEX IF NOT EXISTS task_order_ix ON tasks(task_order, task)", [])?;
     tx.execute("CREATE INDEX IF NOT EXISTS tasks_stacks_fk_ix ON tasks(stack_id)", [])?;
     tx.execute("INSERT INTO stacks(id, name) VALUES (?, 'default')", params![DEFAULT_STACK_ID])?;
     tx.execute("INSERT INTO app_state(stack_id) VALUES (?)", params![DEFAULT_STACK_ID])?;
@@ -146,12 +146,12 @@ fn get_current_stack_name(db: &Connection) -> RusqliteResult<String> {
 
 fn push_task(db: &Connection, task: String) -> RusqliteResult<usize> {
     let current_stack_id = get_current_stack_id(db)?;
-    db.execute("INSERT INTO tasks(task, task_order, stack_id) VALUES (?, (SELECT max(task_order) + 1 OR 1.0 FROM tasks), ?)", params![task, current_stack_id])
+    db.execute("INSERT INTO tasks(task, task_order, stack_id) VALUES (?, (SELECT max(task_order) + 1 OR 1 FROM tasks), ?)", params![task, current_stack_id])
 }
 
 fn pushback_task(db: &Connection, task: String) -> RusqliteResult<usize> {
     let current_stack_id = get_current_stack_id(db)?;
-    db.execute("INSERT INTO tasks(task, task_order, stack_id) VALUES (?, (SELECT min(task_order) - 1 OR 1.0 FROM tasks), ?)", params![task, current_stack_id])
+    db.execute("INSERT INTO tasks(task, task_order, stack_id) VALUES (?, (SELECT min(task_order) - 1 OR 1 FROM tasks), ?)", params![task, current_stack_id])
 }
 
 fn pop_task(db: &Connection) -> RusqliteResult<Option<String>> {
@@ -184,7 +184,7 @@ fn clear_all_tasks(db: &Connection) -> RusqliteResult<()> {
 /// Insert `task` after the `task_index`th task, starting from 0.
 /// 
 /// i.e. if `task_index == 0`, then this is equivalent to `backpush`
-fn insert_after(db: &Connection, task_index: u32, task: String) -> Result<(), Box<dyn Error>> {
+fn insert_after(db: &mut Connection, task_index: u32, task: String) -> Result<(), Box<dyn Error>> {
     // two cases: task is last and task is not last
     // if task is not last, avg() works
     // if task is last, avg() just gives task order
@@ -206,9 +206,12 @@ fn insert_after(db: &Connection, task_index: u32, task: String) -> Result<(), Bo
     // sqlite starts rows from 1
     let task_index = task_index + 1;
     // task is not last, we are good to go.
-    let task_order: f64 = db.query_row("SELECT avg(task_order) FROM (SELECT row_number() OVER (ORDER BY task_order) task_index, task_order) WHERE task_index BETWEEN :task_index AND :task_index + 1", 
+    let task_order: u32 = db.query_row("SELECT task_order + 1 FROM (SELECT row_number() OVER (ORDER BY task_order) task_index, task_order FROM tasks) WHERE task_index = :task_index", 
     named_params! {":task_index": task_index}, |row| row.get(0))?;
-    db.execute("INSERT INTO tasks(task, task_order, stack_id) VALUES (:task, :task_order, :stack_id)", named_params! {":task": task, ":task_order": task_order, ":stack_id": current_stack_id})?;
+    let tx = db.transaction()?;
+    tx.execute("UPDATE tasks SET task_order = task_order + 1 WHERE task_order >= :task_order AND stack_id = :stack_id", named_params! {":task_order": task_order, ":stack_id": current_stack_id})?;
+    tx.execute("INSERT INTO tasks(task, task_order, stack_id) VALUES (:task, :task_order, :stack_id)", named_params! {":task": task, ":task_order": task_order, ":stack_id": current_stack_id})?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -272,7 +275,7 @@ fn switch_to_stack(db: &Connection, stack_name: String) -> Result<(), Box<dyn Er
 }
 
 fn list_stacks(db: &Connection) -> RusqliteResult<Vec<String>> {
-    let mut stmt = db.prepare("SELECT * FROM stacks")?;
+    let mut stmt = db.prepare("SELECT name FROM stacks")?;
     let result = stmt.query_map([], |row| row.get(0))?.collect();
     result
 }
