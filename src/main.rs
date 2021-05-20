@@ -20,7 +20,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     .help("task description")
                     .required(true)
                     .takes_value(true)))
-        .subcommand(SubCommand::with_name("pushback")
+        .subcommand(SubCommand::with_name("backpush")
             .about("Push a task onto the bottom of the stack")
             .arg(Arg::with_name("TASK")
                 .help("task description")
@@ -32,6 +32,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             .about("List all tasks"))
         .subcommand(SubCommand::with_name("clear")
             .about("Clear all tasks on the current stack"))
+        .subcommand(SubCommand::with_name("clearall")
+            .about("Clear all tasks from all stacks"))   
         .subcommand(SubCommand::with_name("newstack")
             .about("Create a new stack")
             .arg(Arg::with_name("NAME")
@@ -65,7 +67,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             let task = submatches.unwrap().value_of("TASK").unwrap();
             push_task(&conn, task.into())?;
         },
-        ("pushback", submatches) => {
+        ("backpush", submatches) => {
             let task = submatches.unwrap().value_of("TASK").unwrap();
             pushback_task(&conn, task.into())?;
         },
@@ -73,11 +75,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             if let Some(task) = pop_task(&conn)? {
                 println!("{} ✔️", task);
             } else {
-                println!("No tasks!");
-                std::process::exit(1);
+                return Err("No tasks!".into());
             }
         }
         ("clear", _) => clear_tasks(&conn)?,
+        ("clearall", _) => clear_all_tasks(&conn)?,
         ("ls", _) => {
             println!("Stack: {}", get_current_stack_name(&conn)?);
             list_tasks(&conn)?.iter().enumerate().for_each(|(i, task)| println!("{}. {}", i, task));
@@ -110,14 +112,10 @@ fn init_db(db: &mut Connection) -> RusqliteResult<()> {
     let tx = db.transaction()?;
     tx.execute("PRAGMA foreign_keys = ON", [])?;
     tx.execute("CREATE TABLE IF NOT EXISTS stacks(id INTEGER PRIMARY KEY, name TEXT NOT NULL, UNIQUE(name))", [])?;
-    println!("Creating app_state");
     tx.execute("CREATE TABLE IF NOT EXISTS app_state(stack_id INTEGER NOT NULL, FOREIGN KEY(stack_id) REFERENCES stacks(id))", [])?;
-    println!("Creating tasks");
     tx.execute("CREATE TABLE IF NOT EXISTS tasks(task TEXT NOT NULL, task_order REAL NOT NULL, id INTEGER PRIMARY KEY, stack_id INTEGER NOT NULL, FOREIGN KEY(stack_id) REFERENCES stacks(id), CHECK (task_order = task_order))", [])?;
-    println!("Creating index");
     tx.execute("CREATE INDEX IF NOT EXISTS tasks_stacks_fk_ix ON tasks(stack_id)", [])?;
     tx.execute("INSERT INTO stacks(id, name) VALUES (?, 'default')", params![DEFAULT_STACK_ID])?;
-    println!("Inserting into app_state");
     tx.execute("INSERT INTO app_state(stack_id) VALUES (?)", params![DEFAULT_STACK_ID])?;
     tx.commit()?;
     Ok(())
@@ -164,6 +162,11 @@ fn pop_task(db: &Connection) -> RusqliteResult<Option<String>> {
 fn clear_tasks(db: &Connection) -> RusqliteResult<()> {
     let current_stack_id = get_current_stack_id(db)?;
     db.execute("DELETE FROM tasks WHERE stack_id = ?", params![current_stack_id])?;
+    Ok(())
+}
+
+fn clear_all_tasks(db: &Connection) -> RusqliteResult<()> {
+    db.execute("DELETE FROM tasks WHERE 1 = 1", [])?;
     Ok(())
 }
 
