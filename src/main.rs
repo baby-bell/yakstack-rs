@@ -146,12 +146,12 @@ fn get_current_stack_name(db: &Connection) -> RusqliteResult<String> {
 
 fn push_task(db: &Connection, task: String) -> RusqliteResult<usize> {
     let current_stack_id = get_current_stack_id(db)?;
-    db.execute("INSERT INTO tasks(task, task_order, stack_id) VALUES (?, (SELECT max(task_order) + 1 OR 1 FROM tasks), ?)", params![task, current_stack_id])
+    db.execute("INSERT INTO tasks(task, task_order, stack_id) VALUES (?, (SELECT coalesce(max(task_order) + 1, 1) FROM tasks), ?)", params![task, current_stack_id])
 }
 
 fn pushback_task(db: &Connection, task: String) -> RusqliteResult<usize> {
     let current_stack_id = get_current_stack_id(db)?;
-    db.execute("INSERT INTO tasks(task, task_order, stack_id) VALUES (?, (SELECT min(task_order) - 1 OR 1 FROM tasks), ?)", params![task, current_stack_id])
+    db.execute("INSERT INTO tasks(task, task_order, stack_id) VALUES (?, (SELECT coalesce(min(task_order) - 1, 1) FROM tasks), ?)", params![task, current_stack_id])
 }
 
 fn pop_task(db: &Connection) -> RusqliteResult<Option<String>> {
