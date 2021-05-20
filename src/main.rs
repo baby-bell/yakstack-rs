@@ -11,44 +11,48 @@ const DEFAULT_STACK_ID: StackId = 1;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let matches = App::new("yakstack")
-                      .version("0.2")
-                      .about("yak-shaving stack")
-                      .settings(&[AppSettings::SubcommandRequiredElseHelp])
-                      .subcommand(SubCommand::with_name("push")
-                          .about("Push a task onto the stack")
-                          .arg(Arg::with_name("TASK")
-                                .help("task description")
-                                .required(true)
-                                .takes_value(true)))
-                      .subcommand(SubCommand::with_name("pushback")
-                          .about("Push a task onto the bottom of the stack")
-                          .arg(Arg::with_name("TASK")
-                              .help("task description")
-                              .required(true)
-                              .takes_value(true)))
-                      .subcommand(SubCommand::with_name("pop")
-                          .about("Pop a task from the top of the stack"))
-                      .subcommand(SubCommand::with_name("ls")
-                          .about("List all tasks"))
-                      .subcommand(SubCommand::with_name("clear")
-                          .about("Clear all tasks"))
-                      .subcommand(SubCommand::with_name("newstack")
-                          .about("Create a new stack")
-                          .arg(Arg::with_name("NAME")
-                              .help("name of the stack")
-                              .required(true)
-                              .takes_value(true)))
-                      .subcommand(SubCommand::with_name("switchto")
-                          .arg(Arg::with_name("NAME")
-                              .help("name of the stack to switch to")
-                              .required(true)
-                              .takes_value(true)))
-                      .subcommand(SubCommand::with_name("dropstack")
-                          .arg(Arg::with_name("NAME")
-                              .help("name of the stack to drop. Must not be default or current stack")
-                              .required(true)
-                              .takes_value(true)))
-                      .get_matches();
+        .version("0.2")
+        .about("yak-shaving stack")
+        .settings(&[AppSettings::SubcommandRequiredElseHelp])
+        .subcommand(SubCommand::with_name("push")
+            .about("Push a task onto the stack")
+            .arg(Arg::with_name("TASK")
+                    .help("task description")
+                    .required(true)
+                    .takes_value(true)))
+        .subcommand(SubCommand::with_name("pushback")
+            .about("Push a task onto the bottom of the stack")
+            .arg(Arg::with_name("TASK")
+                .help("task description")
+                .required(true)
+                .takes_value(true)))
+        .subcommand(SubCommand::with_name("pop")
+            .about("Pop a task from the top of the stack"))
+        .subcommand(SubCommand::with_name("ls")
+            .about("List all tasks"))
+        .subcommand(SubCommand::with_name("clear")
+            .about("Clear all tasks on the current stack"))
+        .subcommand(SubCommand::with_name("newstack")
+            .about("Create a new stack")
+            .arg(Arg::with_name("NAME")
+                .help("name of the stack")
+                .required(true)
+                .takes_value(true)))
+        .subcommand(SubCommand::with_name("switchto")
+            .about("Switch to another stack")
+            .arg(Arg::with_name("NAME")
+                .help("name of the stack to switch to")
+                .required(true)
+                .takes_value(true)))
+        .subcommand(SubCommand::with_name("dropstack")
+            .about("Drop a stack")
+            .arg(Arg::with_name("NAME")
+                .help("name of the stack to drop. Must not be default or current stack")
+                .required(true)
+                .takes_value(true)))
+        .subcommand(SubCommand::with_name("liststacks")
+            .about("List all stacks"))
+        .get_matches();
     let mut db_path = std::env::temp_dir();
     db_path.push("yakstack.db");
     let mut conn = Connection::open(db_path)
@@ -89,6 +93,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         ("dropstack", submatches) => {
             let name = submatches.unwrap().value_of("NAME").unwrap();
             drop_stack(&mut conn, name.into())?;
+        }
+        ("liststacks", _) => {
+            list_stacks(&conn)?.iter().for_each(|stack| println!("{}", stack));
         }
         _ => unreachable!("No subcommand provided")
     }
@@ -204,6 +211,12 @@ fn switch_to_stack(db: &Connection, stack_name: String) -> Result<(), Box<dyn Er
             Ok(())
         }
     }
+}
+
+fn list_stacks(db: &Connection) -> RusqliteResult<Vec<String>> {
+    let mut stmt = db.prepare("SELECT * FROM stacks")?;
+    let result = stmt.query_map([], |row| row.get(0))?.collect();
+    result
 }
 
 
