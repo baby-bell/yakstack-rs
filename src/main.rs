@@ -27,12 +27,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .required(true)
                 .takes_value(true)))
         .subcommand(SubCommand::with_name("pop")
-            .about("Pop a task from the top of the stack"))
-        .subcommand(SubCommand::with_name("popto")
-            .about("Pop off the top of the stack and push onto another")
+            .about("Pop a task from the top of the stack")
             .arg(Arg::with_name("NAME")
-                .help("name of the destination stack")
-                .required(true)
+                .help("name of the stack to push onto")
+                .required(false)
                 .takes_value(true)))
         .subcommand(SubCommand::with_name("ls")
             .about("List all tasks"))
@@ -77,16 +75,16 @@ fn main() -> Result<(), Box<dyn Error>> {
             let task = submatches.unwrap().value_of("TASK").unwrap();
             pushback_task(&conn, task.into())?;
         },
-        ("pop", _) => {
+        ("pop", submatches) => {
+            if let Some(destination_stack) = submatches.unwrap().value_of("NAME") {
+                return pop_to(&conn, destination_stack.into());
+            }
+
             if let Some(task) = pop_task(&conn)? {
                 println!("{} ✔️", task);
             } else {
                 return Err("No tasks!".into());
             }
-        }
-        ("popto", submatches) => {
-            let stack= submatches.unwrap().value_of("NAME").unwrap();
-            pop_to(&conn, stack.into())?;
         }
         ("clear", _) => clear_tasks(&conn)?,
         ("clearall", _) => clear_all_tasks(&conn)?,
@@ -289,7 +287,7 @@ fn list_tasks(db: &Connection) -> RusqliteResult<Vec<String>> {
 }
 
 // TODO: this
-fn swap_tasks(db: &Connection, idx1: u64, idx2: u64) -> Result<(), Box<dyn Error>> {
+fn swap_tasks(db: &mut Connection, idx1: u64, idx2: u64) -> Result<(), Box<dyn Error>> {
     let task_count: u64 = db.query_row("SELECT count(*) FROM tasks", [], |row| row.get(0))?;
     match (idx1 >= task_count, idx2 >= task_count) {
         (false, false) => {}
@@ -302,6 +300,10 @@ fn swap_tasks(db: &Connection, idx1: u64, idx2: u64) -> Result<(), Box<dyn Error
         }
     }
 
+    let (min, max) = (cmp::min(idx1, idx2) + 1, cmp::max(idx1, idx2) + 1);
+    let mut stmt = db.prepare(
+        "SELECT task_order, id FROM (SELECT task_order, id, row_number() OVER (ORDER BY task_order) row) WHERE row IN (?, ?)"
+    )?;
 
     Ok(())
 }
