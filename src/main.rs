@@ -1,7 +1,8 @@
-use std::error::Error;
+use core::num;
+use std::{error::Error, future::get_context};
 use std::cmp;
 
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, named_params};
 use rusqlite::params;
 use rusqlite::Result as RusqliteResult;
 use clap::{Arg, App, SubCommand, AppSettings};
@@ -28,6 +29,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .takes_value(true)))
         .subcommand(SubCommand::with_name("pop")
             .about("Pop a task from the top of the stack"))
+        .subcommand(SubCommand::with_name("popto")
+            .about("Pop off the top of the stack and push onto another")
+            .arg(Arg::with_name("NAME")
+                .help("name of the destination stack")
+                .required(true)
+                .takes_value(true)))
         .subcommand(SubCommand::with_name("ls")
             .about("List all tasks"))
         .subcommand(SubCommand::with_name("clear")
@@ -77,6 +84,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             } else {
                 return Err("No tasks!".into());
             }
+        }
+        ("popto", submatches) => {
+            let stack= submatches.unwrap().value_of("NAME").unwrap();
+            pop_to(&conn, stack.into())?;
         }
         ("clear", _) => clear_tasks(&conn)?,
         ("clearall", _) => clear_all_tasks(&conn)?,
@@ -170,6 +181,52 @@ fn clear_all_tasks(db: &Connection) -> RusqliteResult<()> {
     Ok(())
 }
 
+/// Insert `task` after the `task_index`th task, starting from 0.
+/// 
+/// i.e. if `task_index == 0`, then this is equivalent to `backpush`
+fn insert_after(db: &Connection, task_index: u32, task: String) -> Result<(), Box<dyn Error>> {
+    // two cases: task is last and task is not last
+    // if task is not last, avg() works
+    // if task is last, avg() just gives task order
+    let current_stack_id = get_current_stack_id(db)?;
+    let num_tasks = db.query_row("SELECT count(*) FROM tasks WHERE stack_id = ?", params![current_stack_id], |row| row.get(0))?;
+    if task_index >= num_tasks {
+        return Err(format!("task index {} is out of bounds", task_index).into())
+    } else if task_index == 0 {
+        return push_task(db, task)
+            .map(|_| ())
+            .map_err(Into::into);
+    } else if task_index == num_tasks - 1 {
+        return pushback_task(db, task)
+            .map(|_| ())
+            .map_err(Into::into);
+
+    }
+
+    // sqlite starts rows from 1
+    let task_index = task_index + 1;
+    // task is not last, we are good to go.
+    let task_order: f64 = db.query_row("SELECT avg(task_order) FROM (SELECT row_number() OVER (ORDER BY task_order) task_index, task_order) WHERE task_index BETWEEN :task_index AND :task_index + 1", 
+    named_params! {":task_index": task_index}, |row| row.get(0))?;
+    db.execute("INSERT INTO tasks(task, task_order, stack_id) VALUES (:task, :task_order, :stack_id)", named_params! {":task": task, ":task_order": task_order, ":stack_id": current_stack_id})?;
+    Ok(())
+}
+
+/// Pop the current task and push it onto `destination_stack`.
+fn pop_to(db: &Connection, destination_stack: String) -> Result<(), Box<dyn Error>> {
+    let current_stack_id = get_current_stack_id(db)?;
+    let destination_stack_id = stack_name_to_id(db, &destination_stack)?;
+    let maybe_top_task_id: Option<u32> = db.query_row("SELECT id FROM tasks WHERE task_order = (SELECT max(task_order) FROM tasks WHERE stack_id = :stack_id) WHERE stack_id = :stack_id",
+    named_params! {":stack_id": current_stack_id}, |row| row.get(0)).optional()?;
+    if let Some(task_id) = maybe_top_task_id {
+        db.execute("UPDATE tasks SET stack_id = :stack_id WHERE id = :task_id", named_params! {":stack_id": destination_stack_id, ":task_id": task_id})?;
+    }
+    Ok(())
+}
+
+/// Create a new stack called `stack_name`.
+/// 
+/// Returns an error if the stack already exists.
 fn new_stack(db: &Connection, stack_name: String) -> Result<(), Box<dyn Error>> {
     let stack_exists: Option<i32> = db.query_row("SELECT 1 FROM stacks WHERE name = ?", params![stack_name], |row| row.get(0)).optional()?;
     if let Some(_) = stack_exists {
@@ -180,40 +237,38 @@ fn new_stack(db: &Connection, stack_name: String) -> Result<(), Box<dyn Error>> 
     Ok(())
 }
 
-fn stack_name_to_id(db: &Connection, name: &str) -> RusqliteResult<Option<StackId>> {
+/// Convert a stack name into an ID.
+///
+/// Returns an error if `name` does not refer to an existing stack.
+fn stack_name_to_id(db: &Connection, name: &str) -> Result<StackId, Box<dyn Error>> {
     let maybe_stack_id: Option<StackId> = db.query_row("SELECT id FROM stacks WHERE name = ?",
         params![name], |row| row.get(0)).optional()?;
-    Ok(maybe_stack_id)
+    match maybe_stack_id {
+        None => return Err(format!("stack '{}' does not exist", name).into()),
+        Some(id) => Ok(id)
+    }
 }
 
+/// Drop a stack and all tasks in it.
 fn drop_stack(db: &mut Connection, stack_name: String) -> Result<(), Box<dyn Error>> {
     let current_stack_id = get_current_stack_id(db)?;
     let stack_id = stack_name_to_id(db, &stack_name)?;
-    match stack_id {
-        None => return Err(format!("Stack {} doesn't exist!", stack_name).into()),
-        Some(id) => {
-            if id == DEFAULT_STACK_ID {
-                return Err("Can't delete the default stack".into());
-            } else if id == current_stack_id {
-                return Err("Can't delete the current stack".into());
-            }
-            let tx = db.transaction()?;
-            tx.execute("DELETE FROM tasks WHERE stack_id = ?", params![id])?;
-            tx.execute("DELETE FROM stacks WHERE id = ?", params![id])?;
-            tx.commit()?;
-        }
+    if stack_id == DEFAULT_STACK_ID {
+        return Err("Can't delete the default stack".into());
+    } else if stack_id == current_stack_id {
+        return Err("Can't delete the current stack".into());
     }
+    let tx = db.transaction()?;
+    tx.execute("DELETE FROM tasks WHERE stack_id = ?", params![stack_id])?;
+    tx.execute("DELETE FROM stacks WHERE id = ?", params![stack_id])?;
+    tx.commit()?;
     Ok(())
 }
 
 fn switch_to_stack(db: &Connection, stack_name: String) -> Result<(), Box<dyn Error>> {
-    match stack_name_to_id(db, &stack_name)? {
-        None => return Err(format!("Stack {} doesn't exist", stack_name).into()),
-        Some(id) => {
-            db.execute("UPDATE app_state SET stack_id = ?", params![id])?;
-            Ok(())
-        }
-    }
+    let stack_id = stack_name_to_id(db, &stack_name)?;
+    db.execute("UPDATE app_state SET stack_id = ?", params![stack_id])?;
+    Ok(())
 }
 
 fn list_stacks(db: &Connection) -> RusqliteResult<Vec<String>> {
