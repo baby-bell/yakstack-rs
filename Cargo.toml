@@ -10,6 +10,7 @@ edition = "2018"
 rusqlite = { version = "0.25", features = ["bundled"] }
 #rusqlite = "0.25"
 clap = "2"
+thiserror = "1.0"
 
 [profile.release]
 lto = true
