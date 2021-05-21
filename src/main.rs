@@ -1,12 +1,33 @@
 use std::error::Error;
 use std::cmp;
 
+use rusqlite::Error as RusqliteError;
 use rusqlite::{Connection, OptionalExtension, named_params};
 use rusqlite::params;
 use rusqlite::Result as RusqliteResult;
 use clap::{Arg, App, SubCommand, AppSettings};
 
+enum StackError {
+    NoSuchStack(String),
+    StackAlreadyExists(String),
+    CantDeleteDefaultStack,
+    CantDeleteCurrentStack
+}
+
+enum TaskError {
+    NoTasks,
+    NoSuchTask(TaskIndex),
+    NoSuchTasks(TaskIndex)
+}
+
+enum AppError {
+    Stack(StackError),
+    Task(TaskError),
+    Sqlite(RusqliteError)
+}
+
 type StackId = u32;
+type TaskIndex = u32;
 const DEFAULT_STACK_ID: StackId = 1;
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -75,6 +96,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     db_path.push("yakstack.db");
     let mut conn = Connection::open(db_path)
                               .map_err(|e| format!("unable to open yakstack database: {}", e))?;
+    conn.execute("PRAGMA foreign_keys = ON", [])?;
     if !is_db_initialized(&conn) {
         init_db(&mut conn)?;
     }
@@ -140,16 +162,16 @@ fn is_db_initialized(db: &Connection) -> bool {
 }
 
 fn init_db(db: &mut Connection) -> RusqliteResult<()> {
-    let tx = db.transaction()?;
-    tx.execute("PRAGMA foreign_keys = ON", [])?;
-    tx.execute("CREATE TABLE IF NOT EXISTS stacks(id INTEGER PRIMARY KEY, name TEXT NOT NULL, UNIQUE(name))", [])?;
-    tx.execute("CREATE TABLE IF NOT EXISTS app_state(stack_id INTEGER NOT NULL, FOREIGN KEY(stack_id) REFERENCES stacks(id))", [])?;
-    tx.execute("CREATE TABLE IF NOT EXISTS tasks(task TEXT NOT NULL, task_order INTEGER NOT NULL, id INTEGER PRIMARY KEY, stack_id INTEGER NOT NULL, FOREIGN KEY(stack_id) REFERENCES stacks(id), CHECK (task_order = task_order))", [])?;
-    tx.execute("CREATE INDEX IF NOT EXISTS task_order_ix ON tasks(task_order, task)", [])?;
-    tx.execute("CREATE INDEX IF NOT EXISTS tasks_stacks_fk_ix ON tasks(stack_id)", [])?;
-    tx.execute("INSERT INTO stacks(id, name) VALUES (?, 'default')", params![DEFAULT_STACK_ID])?;
-    tx.execute("INSERT INTO app_state(stack_id) VALUES (?)", params![DEFAULT_STACK_ID])?;
-    tx.commit()?;
+    let xact = db.transaction()?;
+    xact.execute("PRAGMA foreign_keys = ON", [])?;
+    xact.execute("CREATE TABLE IF NOT EXISTS stacks(id INTEGER PRIMARY KEY, name TEXT NOT NULL, UNIQUE(name))", [])?;
+    xact.execute("CREATE TABLE IF NOT EXISTS app_state(stack_id INTEGER NOT NULL, FOREIGN KEY(stack_id) REFERENCES stacks(id))", [])?;
+    xact.execute("CREATE TABLE IF NOT EXISTS tasks(task TEXT NOT NULL, task_order INTEGER NOT NULL, id INTEGER PRIMARY KEY, stack_id INTEGER NOT NULL, FOREIGN KEY(stack_id) REFERENCES stacks(id), CHECK (task_order = task_order))", [])?;
+    xact.execute("CREATE INDEX IF NOT EXISTS task_order_ix ON tasks(task_order, task)", [])?;
+    xact.execute("CREATE INDEX IF NOT EXISTS tasks_stacks_fk_ix ON tasks(stack_id)", [])?;
+    xact.execute("INSERT INTO stacks(id, name) VALUES (?, 'default')", params![DEFAULT_STACK_ID])?;
+    xact.execute("INSERT INTO app_state(stack_id) VALUES (?)", params![DEFAULT_STACK_ID])?;
+    xact.commit()?;
     Ok(())
 }
 
@@ -229,10 +251,10 @@ fn insert_after(db: &mut Connection, task_index: u32, task: String) -> Result<()
     // task is not last, we are good to go.
     let task_order: u32 = db.query_row("SELECT task_order + 1 FROM (SELECT row_number() OVER (ORDER BY task_order) task_index, task_order FROM tasks) WHERE task_index = :task_index", 
     named_params! {":task_index": task_index}, |row| row.get(0))?;
-    let tx = db.transaction()?;
-    tx.execute("UPDATE tasks SET task_order = task_order + 1 WHERE task_order >= :task_order AND stack_id = :stack_id", named_params! {":task_order": task_order, ":stack_id": current_stack_id})?;
-    tx.execute("INSERT INTO tasks(task, task_order, stack_id) VALUES (:task, :task_order, :stack_id)", named_params! {":task": task, ":task_order": task_order, ":stack_id": current_stack_id})?;
-    tx.commit()?;
+    let xact = db.transaction()?;
+    xact.execute("UPDATE tasks SET task_order = task_order + 1 WHERE task_order >= :task_order AND stack_id = :stack_id", named_params! {":task_order": task_order, ":stack_id": current_stack_id})?;
+    xact.execute("INSERT INTO tasks(task, task_order, stack_id) VALUES (:task, :task_order, :stack_id)", named_params! {":task": task, ":task_order": task_order, ":stack_id": current_stack_id})?;
+    xact.commit()?;
     Ok(())
 }
 
@@ -282,10 +304,10 @@ fn drop_stack(db: &mut Connection, stack_name: String) -> Result<(), Box<dyn Err
     } else if stack_id == current_stack_id {
         return Err("Can't delete the current stack".into());
     }
-    let tx = db.transaction()?;
-    tx.execute("DELETE FROM tasks WHERE stack_id = ?", params![stack_id])?;
-    tx.execute("DELETE FROM stacks WHERE id = ?", params![stack_id])?;
-    tx.commit()?;
+    let xact = db.transaction()?;
+    xact.execute("DELETE FROM tasks WHERE stack_id = ?", params![stack_id])?;
+    xact.execute("DELETE FROM stacks WHERE id = ?", params![stack_id])?;
+    xact.commit()?;
     Ok(())
 }
 
@@ -309,7 +331,6 @@ fn list_tasks(db: &Connection) -> RusqliteResult<Vec<String>> {
     result
 }
 
-// TODO: this
 fn swap_tasks(db: &mut Connection, idx1: u64, idx2: u64) -> Result<(), Box<dyn Error>> {
     let task_count: u64 = db.query_row("SELECT count(*) FROM tasks", [], |row| row.get(0))?;
     match (idx1 >= task_count, idx2 >= task_count) {
@@ -324,9 +345,20 @@ fn swap_tasks(db: &mut Connection, idx1: u64, idx2: u64) -> Result<(), Box<dyn E
     }
 
     let (min, max) = (cmp::min(idx1, idx2) + 1, cmp::max(idx1, idx2) + 1);
-    let mut stmt = db.prepare(
-        "SELECT task_order, id FROM (SELECT task_order, id, row_number() OVER (ORDER BY task_order) row) WHERE row IN (?, ?)"
-    )?;
+    let mut data: Vec<(i32, i32)> = Vec::with_capacity(2);
+    {
+        let mut stmt = db.prepare(
+            "SELECT task_order, id FROM (SELECT task_order, id, row_number() OVER (ORDER BY task_order) row FROM tasks) WHERE row IN (?, ?)"
+        )?;
+        let rows = stmt.query_map(params![min, max], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        for row in rows {
+            data.push(row?);
+        }
+    }
+    let xact = db.transaction()?;
+    xact.execute("UPDATE tasks SET task_order = ? WHERE id = ?", params![data[0].0, data[1].1])?;
+    xact.execute("UPDATE tasks SET task_order = ? WHERE id = ?", params![data[1].0, data[0].1])?;
+    xact.commit()?;
 
     Ok(())
 }
