@@ -9,6 +9,7 @@ use rusqlite::Result as RusqliteResult;
 use clap::{Arg, App, SubCommand, AppSettings};
 use thiserror::Error;
 
+/// Errors related to stack management.
 #[derive(Error, Debug)]
 enum StackError {
     #[error("no such stack: '{0}'")]
@@ -21,6 +22,7 @@ enum StackError {
     CantDeleteCurrentStack
 }
 
+/// Errors related to task management.
 #[derive(Error, Debug)]
 enum TaskError {
     #[error("no tasks!")]
@@ -184,10 +186,12 @@ fn is_task_index(arg: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Check whether `db` is initialized.
 fn is_db_initialized(db: &Connection) -> bool {
     get_current_stack_id(db).is_ok()
 }
 
+/// Initialize `db` with application tables.
 fn init_db(db: &mut Connection) -> AppResult<()> {
     let xact = db.transaction()?;
     xact.execute("PRAGMA foreign_keys = ON", [])?;
@@ -201,30 +205,34 @@ fn init_db(db: &mut Connection) -> AppResult<()> {
     Ok(())
 }
 
+/// Get the ID of the current stack.
 fn get_current_stack_id(db: &Connection) -> AppResult<StackId> {
     let stack_id: StackId = db.query_row("SELECT stack_id FROM app_state", [], |row| row.get(0))?;
     Ok(stack_id)
 }
 
+/// Get the name of the current stack.
 fn get_current_stack_name(db: &Connection) -> AppResult<String> {
     let current_stack_id = get_current_stack_id(db)?;
     let current_stack_name: String = db.query_row("SELECT name FROM stacks WHERE id = ?", params![current_stack_id], |row| row.get(0))?;
     Ok(current_stack_name)
 }
 
-
+/// Push `task` onto the top of the stack.
 fn push_task(db: &Connection, task: String) -> AppResult<()> {
     let current_stack_id = get_current_stack_id(db)?;
     db.execute("INSERT INTO tasks(task, task_order, stack_id) VALUES (?, (SELECT coalesce(max(task_order) + 1, 1) FROM tasks), ?)", params![task, current_stack_id])?;
     Ok(())
 }
 
+/// Put `task` onto the bottom of the stack.
 fn pushback_task(db: &Connection, task: String) -> AppResult<()> {
     let current_stack_id = get_current_stack_id(db)?;
     db.execute("INSERT INTO tasks(task, task_order, stack_id) VALUES (?, (SELECT coalesce(min(task_order) - 1, 1) FROM tasks), ?)", params![task, current_stack_id])?;
     Ok(())
 }
 
+/// Pop the top task off the stack.
 fn pop_task(db: &Connection) -> AppResult<Option<String>> {
     let current_stack_id = get_current_stack_id(db)?;
     let maybe_task_id: Option<i64> = db.query_row("SELECT id
@@ -241,12 +249,14 @@ fn pop_task(db: &Connection) -> AppResult<Option<String>> {
     }
 }
 
+/// Clear all tasks from the current stack.
 fn clear_tasks(db: &Connection) -> AppResult<()> {
     let current_stack_id = get_current_stack_id(db)?;
     db.execute("DELETE FROM tasks WHERE stack_id = ?", params![current_stack_id])?;
     Ok(())
 }
 
+/// Clear all tasks from all stacks.
 fn clear_all_tasks(db: &Connection) -> AppResult<()> {
     db.execute("DELETE FROM tasks WHERE 1 = 1", [])?;
     Ok(())
@@ -334,12 +344,14 @@ fn drop_stack(db: &mut Connection, stack_name: String) -> AppResult<()> {
     Ok(())
 }
 
+/// Switch to the stack `stack_name`.
 fn switch_to_stack(db: &Connection, stack_name: String) -> AppResult<()> {
     let stack_id = stack_name_to_id(db, &stack_name)?;
     db.execute("UPDATE app_state SET stack_id = ?", params![stack_id])?;
     Ok(())
 }
 
+/// List all stacks.
 fn list_stacks(db: &Connection) -> RusqliteResult<Vec<String>> {
     let mut stmt = db.prepare("SELECT name FROM stacks")?;
     let result = stmt.query_map([], |row| row.get(0))?.collect();
