@@ -1,6 +1,8 @@
+use core::num;
 use std::error::Error as StdError;
-use std::cmp;
+use std::{cmp, env};
 use std::process;
+use std::ffi::OsString;
 
 use rusqlite::Error as RusqliteError;
 use rusqlite::{Connection, OptionalExtension, named_params};
@@ -34,13 +36,23 @@ enum TaskError {
 }
 
 #[derive(Error, Debug)]
+enum CommandError {
+    #[error("could not find command matching #{0}")]
+    NoMatchingCommand(String),
+    #[error("more than one command matches #{0}")]
+    AmbiguousPrefix(String)
+}
+
+#[derive(Error, Debug)]
 enum AppError {
     #[error("{0}")]
     Stack(#[from] StackError),
     #[error("{0}")]
     Task(#[from] TaskError),
     #[error("database error: {0}")]
-    Sqlite(#[from] RusqliteError)
+    Sqlite(#[from] RusqliteError),
+    #[error("{0}")]
+    Command(#[from] CommandError)
 }
 
 type AppResult<T> = Result<T, AppError>;
@@ -59,7 +71,29 @@ fn main() {
     }
 }
 
+/// All possible commands. Used for prefix matching.
+static COMMANDS: &[&str] = &[
+    "push",
+    "backpush",
+    "pop",
+    "ls",
+    "swap",
+    "clear",
+    "clearall",
+    "newstack",
+    "switchto",
+    "dropstack",
+    "liststacks"
+];
+
 fn app_main() -> Result<(), Box<dyn StdError>> {
+    let mut os_args: Vec<OsString> = env::args_os().collect();
+    if os_args.len() > 1 {
+        let raw_command = os_args[1].to_str().unwrap();
+        os_args[1] = resolve_command(raw_command)?.into();
+
+    }
+    let os_args = os_args;
     let matches = App::new("yakstack")
         .version("0.2")
         .about("yak-shaving stack")
@@ -120,7 +154,7 @@ fn app_main() -> Result<(), Box<dyn StdError>> {
                 .takes_value(true)))
         .subcommand(SubCommand::with_name("liststacks")
             .about("List all stacks"))
-        .get_matches();
+        .get_matches_from(&os_args);
     let mut db_path = std::env::temp_dir();
     db_path.push("yakstack.db");
     let mut conn = Connection::open(db_path)
@@ -179,6 +213,48 @@ fn app_main() -> Result<(), Box<dyn StdError>> {
         _ => unreachable!("No subcommand provided")
     }
     Ok(())
+}
+
+/// Resolve a `prefix` into its full command.
+fn resolve_command(prefix: &str) -> Result<&str, CommandError>  {
+    let mut matcher: &str = "";
+    let mut num_matches = 0;
+    for &c in COMMANDS {
+        // Commands may be prefixes of others.
+        if c == prefix {
+            matcher = c;
+            num_matches = 1;
+            break;
+        } else if c.starts_with(prefix) {
+            matcher = c;
+            num_matches += 1;
+        }
+    }
+
+    if num_matches == 0 {
+        Err(CommandError::NoMatchingCommand(prefix.into()))
+    } else if num_matches > 1 {
+        Err(CommandError::AmbiguousPrefix(prefix.into()))
+    } else {
+        Ok(matcher)
+    }
+}
+
+mod tests {
+    use crate::resolve_command;
+    use crate::{AppError, CommandError};
+
+    #[test]
+    fn resolve_command_test() {
+        assert!(matches!(resolve_command("l"), Err(CommandError::AmbiguousPrefix(_))));
+        assert!(matches!(resolve_command("xxx"), Err(CommandError::NoMatchingCommand(_))));
+        assert!(matches!(resolve_command("b"), Ok("backpush")));
+    }
+
+    #[test]
+    fn resolve_command_command_prefixes_other_command_works() {
+        assert!(matches!(resolve_command("clear"), Ok("clear")));
+    }
 }
 
 fn is_task_index(arg: String) -> Result<(), String> {
