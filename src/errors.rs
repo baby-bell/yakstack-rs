@@ -30,9 +30,9 @@ pub enum TaskError {
 
 #[derive(Error, Debug)]
 pub enum CommandError {
-    #[error("could not find command matching #{0}")]
+    #[error("could not find command matching '{0}'")]
     NoMatchingCommand(String),
-    #[error("more than one command matches #{0}")]
+    #[error("more than one command matches '{0}'")]
     AmbiguousPrefix(String)
 }
 

@@ -196,7 +196,7 @@ fn resolve_command(prefix: &str) -> Result<&str, CommandError>  {
 
 mod tests {
     use crate::resolve_command;
-    use crate::errors::{AppError, CommandError};
+    use crate::errors::CommandError;
 
     #[test]
     fn resolve_command_test() {
