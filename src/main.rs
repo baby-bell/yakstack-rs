@@ -49,7 +49,7 @@ fn app_main() -> Result<(), Box<dyn StdError>> {
     }
     let os_args = os_args;
     let matches = App::new("yakstack")
-        .version("0.2")
+        .version("0.3")
         .about("yak-shaving stack")
         .settings(&[AppSettings::SubcommandRequiredElseHelp])
         .subcommand(SubCommand::with_name("push")
