@@ -172,7 +172,8 @@ pub fn list_tasks(db: &Connection) -> AppResult<Vec<String>> {
 }
 
 pub fn swap_tasks(db: &mut Connection, idx1: TaskIndex, idx2: TaskIndex) -> AppResult<()> {
-    let task_count: TaskIndex = db.query_row("SELECT count(*) FROM tasks", [], |row| row.get(0))?;
+    let current_stack_id = get_current_stack_id(db)?;
+    let task_count: TaskIndex = db.query_row("SELECT count(*) FROM tasks WHERE stack_id = ?", params![current_stack_id], |row| row.get(0))?;
     match (idx1 >= task_count, idx2 >= task_count) {
         (false, false) => {}
         (true, false) | (false, true) => {
@@ -185,20 +186,39 @@ pub fn swap_tasks(db: &mut Connection, idx1: TaskIndex, idx2: TaskIndex) -> AppR
     }
 
     let (min, max) = (cmp::min(idx1, idx2) + 1, cmp::max(idx1, idx2) + 1);
-    let mut data: Vec<(i32, i32)> = Vec::with_capacity(2);
-    {
-        let mut stmt = db.prepare(
-            "SELECT task_order, id FROM (SELECT task_order, id, row_number() OVER (ORDER BY task_order) row FROM tasks) WHERE row IN (?, ?)"
-        )?;
-        let rows = stmt.query_map(params![min, max], |row| Ok((row.get(0)?, row.get(1)?)))?;
-        for row in rows {
-            data.push(row?);
-        }
-    }
+    let min_id = task_index_to_task_id(db, current_stack_id, min)?;
+    let max_id = task_index_to_task_id(db, current_stack_id, max)?;
+    let min_order: i32 = db.query_row("SELECT task_order FROM tasks WHERE stack_id = ? AND id = ?", params![current_stack_id, min_id], |r| r.get(0))?;
+    let max_order: i32 = db.query_row("SELECT task_order FROM tasks WHERE stack_id = ? AND id = ?", params![current_stack_id, max_id], |r| r.get(0))?;
     let xact = db.transaction()?;
-    xact.execute("UPDATE tasks SET task_order = ? WHERE id = ?", params![data[0].0, data[1].1])?;
-    xact.execute("UPDATE tasks SET task_order = ? WHERE id = ?", params![data[1].0, data[0].1])?;
+    xact.execute("UPDATE tasks SET task_order = ? WHERE id = ?", params![max_order, min_id])?;
+    xact.execute("UPDATE tasks SET task_order = ? WHERE id = ?", params![min_order, max_id])?;
     xact.commit()?;
 
     Ok(())
+}
+
+fn task_index_to_task_id(db: &mut Connection, stack_id: StackId, task_index: TaskIndex) -> AppResult<i32> {
+    let task_count: TaskIndex = db.query_row("SELECT count(*) FROM tasks WHERE stack_id = ?", params![stack_id], |row| row.get(0))?;
+    if task_index >= task_count {
+        return Err(TaskError::NoSuchTask(task_index).into());
+    }
+
+    let id = db.query_row("SELECT id FROM (SELECT id, row_number() OVER (ORDER BY task_order) row FROM tasks WHERE stack_id = ?) WHERE row = ?",
+    params![stack_id, task_index], 
+    |row| row.get(0))?;
+    Ok(id)
+}
+
+pub fn kill_task(db: &mut Connection, idx: TaskIndex) -> AppResult<String> {
+    let current_stack_id = get_current_stack_id(db)?;
+    let task_count: TaskIndex = db.query_row("SELECT count(*) FROM tasks WHERE stack_id = ?", params![current_stack_id], |row| row.get(0))?;
+    if idx >= task_count {
+        return Err(TaskError::NoSuchTask(idx).into());
+    }
+    let task_id = task_index_to_task_id(db, current_stack_id, idx)?;
+    let task_description = db.query_row("SELECT task FROM tasks WHERE stack_id = ? AND id = ?", params![current_stack_id, task_id], |row| row.get(0))?;
+    db.execute("DELETE FROM tasks WHERE stack_id = ? AND id = ?", params![current_stack_id, task_id])?;
+
+    Ok(task_description)
 }
