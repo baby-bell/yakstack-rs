@@ -174,7 +174,8 @@ fn app_main() -> Result<(), Box<dyn StdError>> {
         }
         ("kill", submatches) => {
             let task: TaskIndex = submatches.unwrap().value_of("TASK").unwrap().parse().unwrap();
-            kill_task(&mut conn, task)?;
+            let killed = kill_task(&mut conn, task)?;
+            println!("{} 🗑️", killed);
         }
         _ => unreachable!("No subcommand provided")
     }
@@ -237,10 +238,10 @@ fn is_db_initialized(db: &Connection) -> bool {
 fn init_db(db: &mut Connection) -> AppResult<()> {
     let xact = db.transaction()?;
     xact.execute("PRAGMA foreign_keys = ON", [])?;
-    xact.execute("CREATE TABLE stacks(id INTEGER PRIMARY KEY, name TEXT NOT NULL, UNIQUE(name))", [])?;
-    xact.execute("CREATE TABLE app_state(stack_id INTEGER NOT NULL, FOREIGN KEY(stack_id) REFERENCES stacks(id))", [])?;
-    xact.execute("CREATE TABLE tasks(task TEXT NOT NULL, task_order INTEGER NOT NULL, id INTEGER PRIMARY KEY, stack_id INTEGER NOT NULL, FOREIGN KEY(stack_id) REFERENCES stacks(id), CHECK (task_order = task_order))", [])?;
-    xact.execute("CREATE INDEX tasks_ix ON tasks(stack_id, task_order, task)", [])?;
+    xact.execute("CREATE TABLE IF NOT EXISTS stacks(id INTEGER PRIMARY KEY, name TEXT NOT NULL, UNIQUE(name))", [])?;
+    xact.execute("CREATE TABLE IF NOT EXISTS app_state(stack_id INTEGER NOT NULL, FOREIGN KEY(stack_id) REFERENCES stacks(id))", [])?;
+    xact.execute("CREATE TABLE IF NOT EXISTS tasks(task TEXT NOT NULL, task_order INTEGER NOT NULL, id INTEGER PRIMARY KEY, stack_id INTEGER NOT NULL, FOREIGN KEY(stack_id) REFERENCES stacks(id), CHECK (task_order = task_order))", [])?;
+    xact.execute("CREATE INDEX IF NOT EXISTS tasks_ix ON tasks(stack_id, task_order, task)", [])?;
     xact.execute("INSERT INTO stacks(id, name) VALUES (?, 'default')", params![DEFAULT_STACK_ID])?;
     xact.execute("INSERT INTO app_state(stack_id) VALUES (?)", params![DEFAULT_STACK_ID])?;
     xact.commit()?;
