@@ -204,7 +204,8 @@ fn task_index_to_task_id(db: &mut Connection, stack_id: StackId, task_index: Tas
         return Err(TaskError::NoSuchTask(task_index).into());
     }
 
-    let id = db.query_row("SELECT id FROM (SELECT id, row_number() OVER (ORDER BY task_order) row FROM tasks WHERE stack_id = ?) WHERE row = ?",
+    eprintln!("Looking up task ID");
+    let id = db.query_row("SELECT id FROM (SELECT id, row_number() OVER (ORDER BY task_order) row FROM tasks WHERE stack_id = ?) WHERE row = (? + 1)",
     params![stack_id, task_index], 
     |row| row.get(0))?;
     Ok(id)
@@ -212,11 +213,13 @@ fn task_index_to_task_id(db: &mut Connection, stack_id: StackId, task_index: Tas
 
 pub fn kill_task(db: &mut Connection, idx: TaskIndex) -> AppResult<String> {
     let current_stack_id = get_current_stack_id(db)?;
+    eprintln!("Looking up task count");
     let task_count: TaskIndex = db.query_row("SELECT count(*) FROM tasks WHERE stack_id = ?", params![current_stack_id], |row| row.get(0))?;
     if idx >= task_count {
         return Err(TaskError::NoSuchTask(idx).into());
     }
     let task_id = task_index_to_task_id(db, current_stack_id, idx)?;
+    eprintln!("Looking up task");
     let task_description = db.query_row("SELECT task FROM tasks WHERE stack_id = ? AND id = ?", params![current_stack_id, task_id], |row| row.get(0))?;
     db.execute("DELETE FROM tasks WHERE stack_id = ? AND id = ?", params![current_stack_id, task_id])?;
 
