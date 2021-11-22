@@ -1,8 +1,26 @@
 
 use rusqlite::Error as RusqliteError;
 use thiserror::Error;
+use std::io;
+use std::process;
 
 use crate::types::*;
+
+#[derive(Error, Debug)]
+pub enum NoteEditorError {
+    #[error("could not spawn note editor process: {0}")]
+    CouldNotSpawnEditor(#[from] io::Error),
+}
+
+#[derive(Error, Debug)]
+pub enum NoteError {
+    #[error("{0}")]
+    Editor(#[from] NoteEditorError),
+    #[error("Editor exited with unsuccessful status: {0}")]
+    EditorErrorExit(process::ExitStatus),
+    #[error("could not read contents of task note: {0}")]
+    CouldNotReadNoteContents(#[from] io::Error),
+}
 
 /// Errors related to stack management.
 #[derive(Error, Debug)]
@@ -45,7 +63,9 @@ pub enum AppError {
     #[error("database error: {0}")]
     Sqlite(#[from] RusqliteError),
     #[error("{0}")]
-    Command(#[from] CommandError)
+    Command(#[from] CommandError),
+    #[error("{0}")]
+    Note(#[from] NoteError),
 }
 
 pub type AppResult<T> = Result<T, AppError>;

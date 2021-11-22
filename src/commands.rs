@@ -198,7 +198,7 @@ pub fn swap_tasks(db: &mut Connection, idx1: TaskIndex, idx2: TaskIndex) -> AppR
     Ok(())
 }
 
-fn task_index_to_task_id(db: &mut Connection, stack_id: StackId, task_index: TaskIndex) -> AppResult<i32> {
+fn task_index_to_task_id(db: &Connection, stack_id: StackId, task_index: TaskIndex) -> AppResult<i32> {
     let task_count: TaskIndex = db.query_row("SELECT count(*) FROM tasks WHERE stack_id = ?", params![stack_id], |row| row.get(0))?;
     if task_index >= task_count {
         return Err(TaskError::NoSuchTask(task_index).into());
@@ -221,4 +221,47 @@ pub fn kill_task(db: &mut Connection, idx: TaskIndex) -> AppResult<String> {
     db.execute("DELETE FROM tasks WHERE stack_id = ? AND id = ?", params![current_stack_id, task_id])?;
 
     Ok(task_description)
+}
+
+pub fn add_note(db: &mut Connection, idx: TaskIndex) -> AppResult<()> {
+    use std::process::Command;
+    use std::fs::File;
+    use std::env;
+    use std::io::prelude::*;
+
+    let editor = env::var_os("EDITOR")
+        .unwrap_or_else(|| "vim".into());
+    // TODO: use tmpfile crate or equivalent
+    let status = Command::new(editor)
+        .arg("/tmp/note.txt")
+        .status()
+        .map_err(NoteEditorError::CouldNotSpawnEditor)
+        .map_err(NoteError::from)?;
+    if !status.success() {
+        return Err(NoteError::EditorErrorExit(status).into());
+    }
+
+    let mut notefile = File::open("/tmp/note.txt")
+        .map_err(|e| NoteError::CouldNotReadNoteContents(e))?;
+    let mut note = String::with_capacity(8192);
+    notefile.read_to_string(&mut note)
+        .map_err(|e| NoteError::CouldNotReadNoteContents(e))?;
+    let current_stack_id = get_current_stack_id(db)?;
+    let task_id = task_index_to_task_id(db, current_stack_id, idx)?;
+    db.execute("UPDATE tasks SET note = ? WHERE id = ?", params![note, task_id])?;
+    Ok(())
+}
+
+pub fn view(db: &Connection, idx: TaskIndex) -> AppResult<()> {
+    let current_stack_id = get_current_stack_id(db)?;
+    let task_id = task_index_to_task_id(db, current_stack_id, idx)?;
+    let mut stmt = db.prepare("SELECT task, note FROM task WHERE id = ? AND stack_id = ?")?;
+    let task: (String, Option<String>) = stmt.query_row(params![task_id, current_stack_id], |row| Ok((row.get(0)?, row.get(1)?)))?;
+
+    println!("Task: {}", task.0);
+    if let Some(note) = task.1 {
+        println!("{}", note);
+    }
+
+    Ok(())
 }

@@ -11,6 +11,7 @@ mod commands;
 mod types;
 mod errors;
 
+
 use types::*;
 use commands::*;
 use errors::{AppResult, TaskError, CommandError};
@@ -38,7 +39,9 @@ static COMMANDS: &[&str] = &[
     "newstack",
     "switchto",
     "dropstack",
-    "liststacks"
+    "liststacks",
+    "addnote",
+    "view"
 ];
 
 fn app_main() -> Result<(), Box<dyn StdError>> {
@@ -116,6 +119,18 @@ fn app_main() -> Result<(), Box<dyn StdError>> {
                 .takes_value(true)))
         .subcommand(SubCommand::with_name("liststacks")
             .about("List all stacks"))
+        .subcommand(SubCommand::with_name("editnote")
+            .about("Add/edit note for a task")
+            .arg(Arg::with_name("TASK")
+                .help("Task to manage.")
+                .required(true)
+                .takes_value(true)))
+        .subcommand(SubCommand::with_name("view")
+            .about("View details for a particular task (e.g. attached note)")
+            .arg(Arg::with_name("TASK")
+                .help("Task to view")
+                .required(true)
+                .takes_value(true)))
         .get_matches_from(&os_args);
     let mut db_path = std::env::temp_dir();
     db_path.push("yakstack.db");
@@ -176,6 +191,24 @@ fn app_main() -> Result<(), Box<dyn StdError>> {
             let task: TaskIndex = submatches.unwrap().value_of("TASK").unwrap().parse().unwrap();
             let killed = kill_task(&mut conn, task)?;
             println!("{} 🗑️", killed);
+        }
+        ("addnote", submatches) => {
+            let task_order: TaskIndex = submatches
+                .expect("BUG: no arguments specified for addnote")
+                .value_of("TASK")
+                .expect("BUG: no value supplied for task")
+                .parse()
+                .expect("BUG: task is not a valid u64");
+            add_note(&mut conn, task_order)?;
+        }
+        ("view", submatches) => {
+            let task_order: TaskIndex = submatches
+                .expect("BUG: no arguments specified for view")
+                .value_of("TASK")
+                .expect("BUG: no value supplied for task")
+                .parse()
+                .expect("BUG: task is not a valid u64");
+            view(&conn, task_order)?;
         }
         _ => unreachable!("No subcommand provided")
     }
@@ -238,7 +271,7 @@ fn is_db_initialized(db: &Connection) -> bool {
 fn init_db(db: &mut Connection) -> AppResult<()> {
     let xact = db.transaction()?;
     xact.execute("PRAGMA foreign_keys = ON", [])?;
-    xact.execute("CREATE TABLE IF NOT EXISTS stacks(id INTEGER PRIMARY KEY, name TEXT NOT NULL, UNIQUE(name))", [])?;
+    xact.execute("CREATE TABLE IF NOT EXISTS stacks(id INTEGER PRIMARY KEY, name TEXT NOT NULL, note TEXT, UNIQUE(name))", [])?;
     xact.execute("CREATE TABLE IF NOT EXISTS app_state(stack_id INTEGER NOT NULL, FOREIGN KEY(stack_id) REFERENCES stacks(id))", [])?;
     xact.execute("CREATE TABLE IF NOT EXISTS tasks(task TEXT NOT NULL, task_order INTEGER NOT NULL, id INTEGER PRIMARY KEY, stack_id INTEGER NOT NULL, FOREIGN KEY(stack_id) REFERENCES stacks(id), CHECK (task_order = task_order))", [])?;
     xact.execute("CREATE INDEX IF NOT EXISTS tasks_ix ON tasks(stack_id, task_order, task)", [])?;
