@@ -228,12 +228,19 @@ pub fn add_note(db: &mut Connection, idx: TaskIndex) -> AppResult<()> {
     use std::fs::File;
     use std::env;
     use std::io::prelude::*;
+    use std::ffi::OsString;
 
     let editor = env::var_os("EDITOR")
         .unwrap_or_else(|| "vim".into());
-    // TODO: use tmpfile crate or equivalent
+    let temp_file = tempfile::tempfile()
+        .map_err(NoteEditorError::NoteFileError)
+        .map_err(NoteError::from)?;
+    let notefile_name: OsString = filename::file_name(&temp_file)
+        .map_err(NoteEditorError::NoteFileError)
+        .map_err(NoteError::from)?
+        .into();
     let status = Command::new(editor)
-        .arg("/tmp/note.txt")
+        .arg(notefile_name)
         .status()
         .map_err(NoteEditorError::CouldNotSpawnEditor)
         .map_err(NoteError::from)?;

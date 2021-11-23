@@ -10,6 +10,8 @@ use crate::types::*;
 pub enum NoteEditorError {
     #[error("could not spawn note editor process: {0}")]
     CouldNotSpawnEditor(#[from] io::Error),
+    #[error("problem with note file: {0}")]
+    NoteFileError(io::Error),
 }
 
 #[derive(Error, Debug)]
