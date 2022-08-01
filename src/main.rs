@@ -5,7 +5,7 @@ use std::ffi::OsString;
 
 use rusqlite::Connection;
 use rusqlite::params;
-use clap::{Arg, App, SubCommand, AppSettings};
+use clap::{Arg, App, SubCommand};
 
 mod commands;
 mod types;
@@ -52,7 +52,7 @@ fn app_main() -> Result<(), Box<dyn StdError>> {
     let matches = App::new("yakstack")
         .version("0.3")
         .about("yak-shaving stack")
-        .settings(&[AppSettings::SubcommandRequiredElseHelp])
+        .subcommand_required(true)
         .subcommand(SubCommand::with_name("push")
             .about("Push a task onto the stack")
             .arg(Arg::with_name("TASK")
@@ -125,17 +125,17 @@ fn app_main() -> Result<(), Box<dyn StdError>> {
     if !is_db_initialized(&conn) {
         init_db(&mut conn)?;
     }
-    match matches.subcommand() {
+    match matches.subcommand().expect("No subcommand provided, bug") {
         ("push", submatches) => {
-            let task = submatches.unwrap().value_of("TASK").unwrap();
+            let task = submatches.value_of("TASK").unwrap();
             push_task(&conn, task.into())?;
         },
         ("backpush", submatches) => {
-            let task = submatches.unwrap().value_of("TASK").unwrap();
+            let task = submatches.value_of("TASK").unwrap();
             pushback_task(&conn, task.into())?;
         },
         ("pop", submatches) => {
-            if let Some(destination_stack) = submatches.unwrap().value_of("NAME") {
+            if let Some(destination_stack) = submatches.value_of("NAME") {
                 return Ok(pop_to(&conn, destination_stack.into())?);
             }
 
@@ -146,7 +146,6 @@ fn app_main() -> Result<(), Box<dyn StdError>> {
             }
         }
         ("swap", submatches) => {
-            let submatches = submatches.unwrap();
             let task1: TaskIndex = submatches.value_of("TASK1").unwrap().parse().unwrap();
             let task2: TaskIndex = submatches.value_of("TASK2").unwrap().parse().unwrap();
             swap_tasks(&mut conn, task1, task2)?;
@@ -158,22 +157,22 @@ fn app_main() -> Result<(), Box<dyn StdError>> {
             list_tasks(&conn)?.iter().enumerate().for_each(|(i, task)| println!("{}. {}", i, task));
         }
         ("newstack", submatches) => {
-            let name = submatches.unwrap().value_of("NAME").unwrap();
+            let name = submatches.value_of("NAME").unwrap();
             new_stack(&conn, name.into())?;
         }
         ("switchto", submatches) => {
-            let name = submatches.unwrap().value_of("NAME").unwrap();
+            let name = submatches.value_of("NAME").unwrap();
             switch_to_stack(&conn, name.into())?;
         }
         ("dropstack", submatches) => {
-            let name = submatches.unwrap().value_of("NAME").unwrap();
+            let name = submatches.value_of("NAME").unwrap();
             drop_stack(&mut conn, name.into())?;
         }
         ("liststacks", _) => {
             list_stacks(&conn)?.iter().for_each(|stack| println!("{}", stack));
         }
         ("kill", submatches) => {
-            let task: TaskIndex = submatches.unwrap().value_of("TASK").unwrap().parse().unwrap();
+            let task: TaskIndex = submatches.value_of("TASK").unwrap().parse().unwrap();
             let killed = kill_task(&mut conn, task)?;
             println!("{} 🗑️", killed);
         }
@@ -224,7 +223,7 @@ mod tests {
     }
 }
 
-fn is_task_index(arg: String) -> Result<(), String> {
+fn is_task_index<'a>(arg: &'a str) -> Result<(), String> {
     let _: TaskIndex = arg.parse().map_err(|e| format!("{} is not a valid unsigned number: {}", arg, e))?;
     Ok(())
 }
