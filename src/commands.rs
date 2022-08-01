@@ -8,6 +8,7 @@ use std::time::Duration;
 use std::path::PathBuf;
 use std::env;
 
+use regex::Regex;
 use rusqlite::Transaction;
 use rusqlite::{Connection, params, named_params, OptionalExtension};
 use rusqlite::Result as RusqliteResult;
@@ -192,7 +193,7 @@ pub fn swap_tasks(db: &mut Connection, idx1: TaskIndex, idx2: TaskIndex) -> AppR
         }
     }
 
-    let (min, max) = (cmp::min(idx1, idx2) + 1, cmp::max(idx1, idx2) + 1);
+    let (min, max) = (cmp::min(idx1, idx2), cmp::max(idx1, idx2));
     let min_id = task_index_to_task_id(db, current_stack_id, min)?;
     let max_id = task_index_to_task_id(db, current_stack_id, max)?;
     let min_order: i32 = db.query_row("SELECT task_order FROM tasks WHERE stack_id = ? AND id = ?", params![current_stack_id, min_id], |r| r.get(0))?;
@@ -230,16 +231,38 @@ pub fn kill_task(db: &mut Connection, idx: TaskIndex) -> AppResult<String> {
     Ok(task_description)
 }
 
+fn parse_delay_spec_into_seconds(spec: &str) -> AppResult<u32> {
+    let spec_regex = Regex::new("(?P<amount>[1-9][0-9]{0,5})(?P<unit>[hms])").expect("bug: invalid regex in parse_delay_spec");
+    if !spec_regex.is_match(spec) {
+        return Err(ReminderError::InvalidReminderTime(spec.into()).into());
+    }
+    let caps = spec_regex.captures(spec).expect("bug: delay spec regex matches but cannot get captures");
+    let amount: u32 = caps.name("amount")
+        .expect("amount capture missing from delay spec regex")
+        .as_str()
+        .parse()
+        .expect("invalid number in delay spec");
+    let unit = caps.name("unit")
+        .expect("unit capture missing from delay spec regex")
+        .as_str();
+    let multiplier = match unit {
+        "h" => 60*60,
+        "m" => 60,
+        "s" => 1,
+        _ => unreachable!("Invalid unit: {}", unit)
+    };
+    Ok(amount.checked_mul(multiplier).expect("bug: overflow in delay time"))
+}
+
 pub fn remind_me(db: &mut Connection, task_index: TaskIndex, reminder_string: String) -> AppResult<()> {
     let current_stack_id = get_current_stack_id(db)?;
     let task_id = task_index_to_task_id(db, current_stack_id, task_index)?;
+    let delay_time = parse_delay_spec_into_seconds(&reminder_string)?;
+    let current_bin = env::current_exe().map_err(|e| AppError::Environment(format!("unable to obtain path to current executable: {}", e)))?;
     // Lock the entire DB to prevent any other modifications
     let xact = Transaction::new(db, rusqlite::TransactionBehavior::Exclusive)?;
-    // TODO: parse reminder string
-    let delay = 10;
     let reminder_id: i32 = xact.query_row("SELECT coalesce(max(id) + 1, 1) FROM reminders", [], |row| row.get(0))?;
-    xact.execute("INSERT INTO reminders(id, delay, task_id) VALUES (?, ?, ?)", params![reminder_id, delay, task_id])?;
-    let current_bin = env::current_exe().map_err(|e| AppError::Environment(format!("unable to obtain path to current executable: {}", e)))?;
+    xact.execute("INSERT INTO reminders(id, delay, task_id) VALUES (?, ?, ?)", params![reminder_id, delay_time, task_id])?;
     // Potential race condition: We spawn the command before committing the transaction.
     // To ensure this does not cause issues, lock the whole database (using an exclusive xact).
     Command::new(current_bin)
@@ -251,8 +274,10 @@ pub fn remind_me(db: &mut Connection, task_index: TaskIndex, reminder_string: St
         .spawn()
         .map_err(|e| AppError::Environment(format!("unable to spawn reminder process: {}", e)))?;
     xact.commit()?;
+    // Do not wait on the process; let it run in the background
     Ok(())
 }
+
 
 pub fn trigger_reminder(db_path: PathBuf, db: Connection, reminder_id: i32) -> AppResult<()> {
     let (reminder_delay, task_id): (u32, i64) = db.query_row("SELECT delay, task_id FROM reminders WHERE id = ?", params![reminder_id], |row| Ok((row.get(0)?, row.get(1)?)))?;

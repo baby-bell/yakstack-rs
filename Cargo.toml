@@ -11,6 +11,7 @@ rusqlite = { version = "0.27", features = ["bundled"] }
 clap = "3"
 thiserror = "1.0"
 notify-rust = "4"
+regex = "1"
 
 [profile.release]
 lto = true
