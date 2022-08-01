@@ -7,10 +7,10 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-rusqlite = { version = "0.25", features = ["bundled"] }
-#rusqlite = "0.25"
-clap = "2"
+rusqlite = { version = "0.27", features = ["bundled"] }
+clap = "3"
 thiserror = "1.0"
+notify-rust = "4"
 
 [profile.release]
 lto = true
