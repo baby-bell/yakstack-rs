@@ -2,10 +2,11 @@ use std::error::Error as StdError;
 use std::env;
 use std::process;
 use std::ffi::OsString;
+use std::time::Duration;
 
 use rusqlite::Connection;
 use rusqlite::params;
-use clap::{Arg, App, SubCommand};
+use clap::{Arg, App, Command};
 
 mod commands;
 mod types;
@@ -38,7 +39,9 @@ static COMMANDS: &[&str] = &[
     "newstack",
     "switchto",
     "dropstack",
-    "liststacks"
+    "liststacks",
+    "triggerreminder",
+    "remindme"
 ];
 
 fn app_main() -> Result<(), Box<dyn StdError>> {
@@ -53,74 +56,91 @@ fn app_main() -> Result<(), Box<dyn StdError>> {
         .version("0.3")
         .about("yak-shaving stack")
         .subcommand_required(true)
-        .subcommand(SubCommand::with_name("push")
+        .subcommand(Command::new("push")
             .about("Push a task onto the stack")
-            .arg(Arg::with_name("TASK")
+            .arg(Arg::new("TASK")
                     .help("task description")
                     .required(true)
                     .takes_value(true)))
-        .subcommand(SubCommand::with_name("backpush")
+        .subcommand(Command::new("backpush")
             .about("Push a task onto the bottom of the stack")
-            .arg(Arg::with_name("TASK")
+            .arg(Arg::new("TASK")
                 .help("task description")
                 .required(true)
                 .takes_value(true)))
-        .subcommand(SubCommand::with_name("pop")
+        .subcommand(Command::new("pop")
             .about("Pop a task from the top of the stack")
-            .arg(Arg::with_name("NAME")
+            .arg(Arg::new("NAME")
                 .help("name of the stack to push onto")
                 .required(false)
                 .takes_value(true)))
-        .subcommand(SubCommand::with_name("ls")
+        .subcommand(Command::new("ls")
             .about("List all tasks"))
-        .subcommand(SubCommand::with_name("swap")
+        .subcommand(Command::new("swap")
             .about("Swap two tasks")
-            .arg(Arg::with_name("TASK1")
+            .arg(Arg::new("TASK1")
                 .help("first task")
                 .required(true)
                 .takes_value(true)
                 .validator(is_task_index))
-            .arg(Arg::with_name("TASK2")
+            .arg(Arg::new("TASK2")
                 .help("second task")
                 .required(true)
                 .takes_value(true)
                 .validator(is_task_index)))
-        .subcommand(SubCommand::with_name("clear")
+        .subcommand(Command::new("clear")
             .about("Clear all tasks on the current stack"))
-        .subcommand(SubCommand::with_name("clearall")
+        .subcommand(Command::new("clearall")
             .about("Clear all tasks from all stacks"))   
-        .subcommand(SubCommand::with_name("newstack")
+        .subcommand(Command::new("newstack")
             .about("Create a new stack")
-            .arg(Arg::with_name("NAME")
+            .arg(Arg::new("NAME")
                 .help("name of the stack")
                 .required(true)
                 .takes_value(true)))
-        .subcommand(SubCommand::with_name("kill")
+        .subcommand(Command::new("kill")
             .about("Delete a task")
-            .arg(Arg::with_name("TASK")
+            .arg(Arg::new("TASK")
                 .help("task to delete")
                 .required(true)
                 .takes_value(true)
                 .validator(is_task_index)))
-        .subcommand(SubCommand::with_name("switchto")
+        .subcommand(Command::new("switchto")
             .about("Switch to another stack")
-            .arg(Arg::with_name("NAME")
+            .arg(Arg::new("NAME")
                 .help("name of the stack to switch to")
                 .required(true)
                 .takes_value(true)))
-        .subcommand(SubCommand::with_name("dropstack")
+        .subcommand(Command::new("dropstack")
             .about("Delete a stack and all its items")
-            .arg(Arg::with_name("NAME")
+            .arg(Arg::new("NAME")
                 .help("name of the stack to drop. Must not be default or current stack")
                 .required(true)
                 .takes_value(true)))
-        .subcommand(SubCommand::with_name("liststacks")
+        .subcommand(Command::new("liststacks")
             .about("List all stacks"))
+        .subcommand(Command::new("triggerreminder")
+            .about("Trigger a reminder as specified in the reminder table")
+            .arg(Arg::new("REMINDER_ID")
+                .required(true)
+                .takes_value(true)))
+        .subcommand(Command::new("remindme")
+            .about("Remind me about a task at some future point in time")
+            .arg(Arg::new("TASK")
+                .help("task to remind about")
+                .required(true)
+                .takes_value(true))
+            .arg(Arg::new("DELAY")
+                .help("time to wait before reminding")
+                .required(true)
+                .takes_value(true)))
         .get_matches_from(&os_args);
     let mut db_path = std::env::temp_dir();
     db_path.push("yakstack.db");
-    let mut conn = Connection::open(db_path)
+    let mut conn = Connection::open(&db_path)
                               .map_err(|e| format!("unable to open yakstack database: {}", e))?;
+    // DB could be locked by a previous remind command.
+    conn.busy_timeout(Duration::from_secs(1))?;
     conn.execute("PRAGMA foreign_keys = ON", [])?;
     if !is_db_initialized(&conn) {
         init_db(&mut conn)?;
@@ -176,6 +196,18 @@ fn app_main() -> Result<(), Box<dyn StdError>> {
             let killed = kill_task(&mut conn, task)?;
             println!("{} 🗑️", killed);
         }
+        ("remindme", submatches) => {
+            let task: TaskIndex = submatches.value_of("TASK").unwrap().parse().unwrap();
+            let time_spec = submatches.value_of("DELAY").unwrap();
+            remind_me(&mut conn, task, time_spec.into())?;
+        }
+        ("triggerreminder", submatches) => {
+            let reminder_id: i32 = submatches.value_of("REMINDER_ID")
+                .ok_or_else(|| unreachable!("Missing REMINDER_ID"))
+                .and_then(|rid| rid.parse())
+                .map_err(|e| format!("unable to parse reminder ID: {}", e))?;
+            trigger_reminder(db_path, conn, reminder_id)?;
+        }
         _ => unreachable!("No subcommand provided")
     }
     Ok(())
@@ -183,6 +215,9 @@ fn app_main() -> Result<(), Box<dyn StdError>> {
 
 /// Resolve a `prefix` into its full command.
 fn resolve_command(prefix: &str) -> Result<&str, CommandError>  {
+    if prefix.starts_with('-') {
+        return Ok(prefix);
+    }
     let mut matcher: &str = "";
     let mut num_matches = 0;
     for &c in COMMANDS {
@@ -240,6 +275,8 @@ fn init_db(db: &mut Connection) -> AppResult<()> {
     xact.execute("CREATE TABLE IF NOT EXISTS stacks(id INTEGER PRIMARY KEY, name TEXT NOT NULL, UNIQUE(name))", [])?;
     xact.execute("CREATE TABLE IF NOT EXISTS app_state(stack_id INTEGER NOT NULL, FOREIGN KEY(stack_id) REFERENCES stacks(id))", [])?;
     xact.execute("CREATE TABLE IF NOT EXISTS tasks(task TEXT NOT NULL, task_order INTEGER NOT NULL, id INTEGER PRIMARY KEY, stack_id INTEGER NOT NULL, FOREIGN KEY(stack_id) REFERENCES stacks(id), CHECK (task_order = task_order))", [])?;
+    // Autoincrement required so that if a reminder is deleted, and then another reminder is created, it does not trigger the old one.
+    xact.execute("CREATE TABLE IF NOT EXISTS reminders(id INTEGER PRIMARY KEY AUTOINCREMENT, delay INTEGER NOT NULL, task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, CHECK (delay > 0))", [])?;
     xact.execute("CREATE INDEX IF NOT EXISTS tasks_ix ON tasks(stack_id, task_order, task)", [])?;
     xact.execute("INSERT INTO stacks(id, name) VALUES (?, 'default')", params![DEFAULT_STACK_ID])?;
     xact.execute("INSERT INTO app_state(stack_id) VALUES (?)", params![DEFAULT_STACK_ID])?;

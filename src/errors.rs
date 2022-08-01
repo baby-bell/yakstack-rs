@@ -45,7 +45,9 @@ pub enum AppError {
     #[error("database error: {0}")]
     Sqlite(#[from] RusqliteError),
     #[error("{0}")]
-    Command(#[from] CommandError)
+    Command(#[from] CommandError),
+    #[error("{0}")]
+    Environment(String),
 }
 
 pub type AppResult<T> = Result<T, AppError>;
