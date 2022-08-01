@@ -37,6 +37,12 @@ pub enum CommandError {
 }
 
 #[derive(Error, Debug)]
+pub enum ReminderError {
+    #[error("reminder time '{0}' is not valid")]
+    InvalidReminderTime(String)
+}
+
+#[derive(Error, Debug)]
 pub enum AppError {
     #[error("{0}")]
     Stack(#[from] StackError),
@@ -48,6 +54,8 @@ pub enum AppError {
     Command(#[from] CommandError),
     #[error("{0}")]
     Environment(String),
+    #[error("{0}")]
+    Reminder(#[from] ReminderError)
 }
 
 pub type AppResult<T> = Result<T, AppError>;
