@@ -6,8 +6,7 @@ use std::time::Duration;
 
 use rusqlite::Connection;
 use rusqlite::params;
-use clap::{Arg, App, Command};
-use uuid::Uuid;
+use clap::{Parser, Subcommand};
 
 mod commands;
 mod types;
@@ -45,6 +44,76 @@ static COMMANDS: &[&str] = &[
     "remindme"
 ];
 
+#[derive(Parser)]
+#[command(version = "0.3.2", about = "Stack-based task tracker", long_about = None)]
+struct Cli {
+    #[command(subcommand)]
+    command: Command
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Push a task onto the stack
+    Push {
+        /// Task text to use
+        task: String,
+    },
+    /// Push a task onto the bottom of the stack.
+    Backpush {
+        /// Task description
+        task: String,
+    },
+    /// Pop a task from the top of the stack
+    Pop {
+        /// Name of the stack to push onto
+        name: Option<String>,
+    },
+    /// List all tasks on the current stack.
+    Ls,
+    /// Swap two tasks
+    Swap {
+        task1: TaskIndex,
+        task2: TaskIndex,
+    },
+    /// Clear all tasks on the current stack.
+    Clear,
+    /// Wipe all stacks clean.
+    Clearall,
+    /// Create a new stack
+    Newstack {
+        /// Name of the new stack. Must not be the same as an existing stack's name!
+        name: String,
+    },
+    /// Delete a task.
+    Kill {
+        task: TaskIndex,
+    },
+    /// Switch to another stack.
+    Switchto {
+        /// Stack to switch to. Must exist.
+        stack: String,
+    },
+    /// Delete a stack and all its items.
+    Dropstack {
+        stack: String,
+    },
+    /// List all stacks.
+    Liststacks,
+    /// Trigger a previously-created reminder.
+    Triggerreminder {
+        reminder_id: String,
+    },
+    /// Create a task reminder at some future point in time.
+    Remindme {
+        /// Task to remind me of. If the task is completed, the reminder will not trigger.
+        task: TaskIndex,
+        /// How long to wait. Specified as ([1-9][0-9]*h)?([1-9][0-9]*m)?([1-9][0-9]*s)?
+        delay: String,
+    }
+}
+
+
+
 fn app_main() -> Result<(), Box<dyn StdError>> {
     let mut os_args: Vec<OsString> = env::args_os().collect();
     if os_args.len() > 1 {
@@ -53,89 +122,7 @@ fn app_main() -> Result<(), Box<dyn StdError>> {
 
     }
     let os_args = os_args;
-    let matches = App::new("yakstack")
-        .version("0.3")
-        .about("yak-shaving stack")
-        .subcommand_required(true)
-        .subcommand(Command::new("push")
-            .about("Push a task onto the stack")
-            .arg(Arg::new("TASK")
-                    .help("task description")
-                    .required(true)
-                    .takes_value(true)))
-        .subcommand(Command::new("backpush")
-            .about("Push a task onto the bottom of the stack")
-            .arg(Arg::new("TASK")
-                .help("task description")
-                .required(true)
-                .takes_value(true)))
-        .subcommand(Command::new("pop")
-            .about("Pop a task from the top of the stack")
-            .arg(Arg::new("NAME")
-                .help("name of the stack to push onto")
-                .required(false)
-                .takes_value(true)))
-        .subcommand(Command::new("ls")
-            .about("List all tasks"))
-        .subcommand(Command::new("swap")
-            .about("Swap two tasks")
-            .arg(Arg::new("TASK1")
-                .help("first task")
-                .required(true)
-                .takes_value(true)
-                .validator(is_task_index))
-            .arg(Arg::new("TASK2")
-                .help("second task")
-                .required(true)
-                .takes_value(true)
-                .validator(is_task_index)))
-        .subcommand(Command::new("clear")
-            .about("Clear all tasks on the current stack"))
-        .subcommand(Command::new("clearall")
-            .about("Clear all tasks from all stacks"))   
-        .subcommand(Command::new("newstack")
-            .about("Create a new stack")
-            .arg(Arg::new("NAME")
-                .help("name of the stack")
-                .required(true)
-                .takes_value(true)))
-        .subcommand(Command::new("kill")
-            .about("Delete a task")
-            .arg(Arg::new("TASK")
-                .help("task to delete")
-                .required(true)
-                .takes_value(true)
-                .validator(is_task_index)))
-        .subcommand(Command::new("switchto")
-            .about("Switch to another stack")
-            .arg(Arg::new("NAME")
-                .help("name of the stack to switch to")
-                .required(true)
-                .takes_value(true)))
-        .subcommand(Command::new("dropstack")
-            .about("Delete a stack and all its items")
-            .arg(Arg::new("NAME")
-                .help("name of the stack to drop. Must not be default or current stack")
-                .required(true)
-                .takes_value(true)))
-        .subcommand(Command::new("liststacks")
-            .about("List all stacks"))
-        .subcommand(Command::new("triggerreminder")
-            .about("Trigger a reminder as specified in the reminder table")
-            .arg(Arg::new("REMINDER_ID")
-                .required(true)
-                .takes_value(true)))
-        .subcommand(Command::new("remindme")
-            .about("Remind me about a task at some future point in time")
-            .arg(Arg::new("TASK")
-                .help("task to remind about")
-                .required(true)
-                .takes_value(true))
-            .arg(Arg::new("DELAY")
-                .help("time to wait before reminding")
-                .required(true)
-                .takes_value(true)))
-        .get_matches_from(&os_args);
+    let cli = Cli::parse_from(os_args.into_iter());
     let mut db_path = std::env::temp_dir();
     db_path.push("yakstack.db");
     let mut conn = Connection::open(&db_path)
@@ -146,18 +133,16 @@ fn app_main() -> Result<(), Box<dyn StdError>> {
     if !is_db_initialized(&conn) {
         init_db(&mut conn)?;
     }
-    match matches.subcommand().expect("No subcommand provided, bug") {
-        ("push", submatches) => {
-            let task = submatches.value_of("TASK").unwrap();
-            push_task(&conn, task.into())?;
+    match cli.command {
+        Command::Push { task }=> {
+            push_task(&conn, task)?;
         },
-        ("backpush", submatches) => {
-            let task = submatches.value_of("TASK").unwrap();
-            pushback_task(&conn, task.into())?;
+        Command::Backpush { task }=> {
+            pushback_task(&conn, task)?;
         },
-        ("pop", submatches) => {
-            if let Some(destination_stack) = submatches.value_of("NAME") {
-                return Ok(pop_to(&conn, destination_stack.into())?);
+        Command::Pop { name }=> {
+            if let Some(name) = name {
+                return Ok(pop_to(&conn, name)?);
             }
 
             if let Some(task) = pop_task(&conn)? {
@@ -166,49 +151,25 @@ fn app_main() -> Result<(), Box<dyn StdError>> {
                 return Err(TaskError::NoTasks.into());
             }
         }
-        ("swap", submatches) => {
-            let task1: TaskIndex = submatches.value_of("TASK1").unwrap().parse().unwrap();
-            let task2: TaskIndex = submatches.value_of("TASK2").unwrap().parse().unwrap();
+        Command::Swap { task1, task2 }=> {
             swap_tasks(&mut conn, task1, task2)?;
         }
-        ("clear", _) => clear_tasks(&conn)?,
-        ("clearall", _) => clear_all_tasks(&conn)?,
-        ("ls", _) => {
+        Command::Clear => clear_tasks(&conn)?,
+        Command::Clearall => clear_all_tasks(&conn)?,
+        Command::Ls => {
             println!("Stack: {}", get_current_stack_name(&conn)?);
             list_tasks(&conn)?.iter().enumerate().for_each(|(i, task)| println!("{}. {}", i, task));
         }
-        ("newstack", submatches) => {
-            let name = submatches.value_of("NAME").unwrap();
-            new_stack(&conn, name.into())?;
-        }
-        ("switchto", submatches) => {
-            let name = submatches.value_of("NAME").unwrap();
-            switch_to_stack(&conn, name.into())?;
-        }
-        ("dropstack", submatches) => {
-            let name = submatches.value_of("NAME").unwrap();
-            drop_stack(&mut conn, name.into())?;
-        }
-        ("liststacks", _) => {
-            list_stacks(&conn)?.iter().for_each(|stack| println!("{}", stack));
-        }
-        ("kill", submatches) => {
-            let task: TaskIndex = submatches.value_of("TASK").unwrap().parse().unwrap();
+        Command::Newstack { name } => new_stack(&conn, name)?,
+        Command::Switchto { stack } => switch_to_stack(&conn, stack)?,
+        Command::Dropstack { stack } => drop_stack(&mut conn, stack)?,
+        Command::Liststacks => list_stacks(&conn)?.iter().for_each(|stack| println!("{}", stack)),
+        Command::Kill { task }=> {
             let killed = kill_task(&mut conn, task)?;
             println!("{} 🗑️", killed);
         }
-        ("remindme", submatches) => {
-            let task: TaskIndex = submatches.value_of("TASK").unwrap().parse().unwrap();
-            let time_spec = submatches.value_of("DELAY").unwrap();
-            remind_me(&mut conn, task, time_spec.into())?;
-        }
-        ("triggerreminder", submatches) => {
-            let reminder_id: String = submatches.value_of("REMINDER_ID")
-                .expect("missing REMINDER_ID")
-                .into();
-            trigger_reminder(db_path, conn, reminder_id)?;
-        }
-        _ => unreachable!("No subcommand provided")
+        Command::Remindme { task, delay }=> remind_me(&mut conn, task, delay)?,
+        Command::Triggerreminder { reminder_id }=> trigger_reminder(db_path, conn, reminder_id)?,
     }
     Ok(())
 }
@@ -256,11 +217,6 @@ mod tests {
     fn resolve_command_command_prefixes_other_command_works() {
         assert!(matches!(resolve_command("clear"), Ok("clear")));
     }
-}
-
-fn is_task_index<'a>(arg: &'a str) -> Result<(), String> {
-    let _: TaskIndex = arg.parse().map_err(|e| format!("{} is not a valid unsigned number: {}", arg, e))?;
-    Ok(())
 }
 
 /// Check whether `db` is initialized.
