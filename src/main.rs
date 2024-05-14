@@ -7,6 +7,7 @@ use std::time::Duration;
 use rusqlite::Connection;
 use rusqlite::params;
 use clap::{Arg, App, Command};
+use uuid::Uuid;
 
 mod commands;
 mod types;
@@ -202,10 +203,9 @@ fn app_main() -> Result<(), Box<dyn StdError>> {
             remind_me(&mut conn, task, time_spec.into())?;
         }
         ("triggerreminder", submatches) => {
-            let reminder_id: i32 = submatches.value_of("REMINDER_ID")
-                .ok_or_else(|| unreachable!("Missing REMINDER_ID"))
-                .and_then(|rid| rid.parse())
-                .map_err(|e| format!("unable to parse reminder ID: {}", e))?;
+            let reminder_id: String = submatches.value_of("REMINDER_ID")
+                .expect("missing REMINDER_ID")
+                .into();
             trigger_reminder(db_path, conn, reminder_id)?;
         }
         _ => unreachable!("No subcommand provided")
@@ -275,8 +275,8 @@ fn init_db(db: &mut Connection) -> AppResult<()> {
     xact.execute("CREATE TABLE IF NOT EXISTS stacks(id INTEGER PRIMARY KEY, name TEXT NOT NULL, UNIQUE(name))", [])?;
     xact.execute("CREATE TABLE IF NOT EXISTS app_state(stack_id INTEGER NOT NULL, FOREIGN KEY(stack_id) REFERENCES stacks(id))", [])?;
     xact.execute("CREATE TABLE IF NOT EXISTS tasks(task TEXT NOT NULL, task_order INTEGER NOT NULL, id INTEGER PRIMARY KEY, stack_id INTEGER NOT NULL, FOREIGN KEY(stack_id) REFERENCES stacks(id), CHECK (task_order = task_order))", [])?;
-    // Autoincrement required so that if a reminder is deleted, and then another reminder is created, it does not trigger the old one.
-    xact.execute("CREATE TABLE IF NOT EXISTS reminders(id INTEGER PRIMARY KEY AUTOINCREMENT, delay INTEGER NOT NULL, task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, CHECK (delay > 0))", [])?;
+    // reminders PK should be a UUID
+    xact.execute("CREATE TABLE IF NOT EXISTS reminders(id TEXT PRIMARY KEY, delay INTEGER NOT NULL, task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, CHECK (delay > 0))", [])?;
     xact.execute("CREATE INDEX IF NOT EXISTS tasks_ix ON tasks(stack_id, task_order, task)", [])?;
     xact.execute("INSERT INTO stacks(id, name) VALUES (?, 'default')", params![DEFAULT_STACK_ID])?;
     xact.execute("INSERT INTO app_state(stack_id) VALUES (?)", params![DEFAULT_STACK_ID])?;

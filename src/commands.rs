@@ -13,6 +13,7 @@ use rusqlite::Transaction;
 use rusqlite::{Connection, params, named_params, OptionalExtension};
 use rusqlite::Result as RusqliteResult;
 use notify_rust::Notification;
+use uuid::Uuid;
 
 /// Get the ID of the current stack.
 pub fn get_current_stack_id(db: &Connection) -> AppResult<StackId> {
@@ -261,7 +262,7 @@ pub fn remind_me(db: &mut Connection, task_index: TaskIndex, reminder_string: St
     let current_bin = env::current_exe().map_err(|e| AppError::Environment(format!("unable to obtain path to current executable: {}", e)))?;
     // Lock the entire DB to prevent any other modifications
     let xact = Transaction::new(db, rusqlite::TransactionBehavior::Exclusive)?;
-    let reminder_id: i32 = xact.query_row("SELECT coalesce(max(id) + 1, 1) FROM reminders", [], |row| row.get(0))?;
+    let reminder_id = Uuid::new_v4().to_string();
     xact.execute("INSERT INTO reminders(id, delay, task_id) VALUES (?, ?, ?)", params![reminder_id, delay_time, task_id])?;
     // Potential race condition: We spawn the command before committing the transaction.
     // To ensure this does not cause issues, lock the whole database (using an exclusive xact).
@@ -279,7 +280,7 @@ pub fn remind_me(db: &mut Connection, task_index: TaskIndex, reminder_string: St
 }
 
 
-pub fn trigger_reminder(db_path: PathBuf, db: Connection, reminder_id: i32) -> AppResult<()> {
+pub fn trigger_reminder(db_path: PathBuf, db: Connection, reminder_id: String) -> AppResult<()> {
     let (reminder_delay, task_id): (u32, i64) = db.query_row("SELECT delay, task_id FROM reminders WHERE id = ?", params![reminder_id], |row| Ok((row.get(0)?, row.get(1)?)))?;
     // Close the DB connection, we don't want to hold onto it while waiting.
     if let Err((_, e)) = db.close() {
