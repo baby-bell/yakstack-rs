@@ -75,7 +75,7 @@ pub fn clear_all_tasks(db: &Connection) -> AppResult<()> {
 /// Insert `task` after the `task_index`th task, starting from 0.
 /// 
 /// i.e. if `task_index == 0`, then this is equivalent to `backpush`
-fn insert_after(db: &mut Connection, task_index: TaskIndex, task: String) -> AppResult<()> {
+pub fn insert_after(db: &mut Connection, task_index: TaskIndex, task: String) -> AppResult<()> {
     // two cases: task is last and task is not last
     // if task is not last, avg() works
     // if task is last, avg() just gives task order
@@ -83,21 +83,27 @@ fn insert_after(db: &mut Connection, task_index: TaskIndex, task: String) -> App
     let num_tasks = db.query_row("SELECT count(*) FROM tasks WHERE stack_id = ?", params![current_stack_id], |row| row.get(0))?;
     if task_index >= num_tasks {
         return Err(TaskError::NoSuchTask(task_index).into());
-    } else if task_index == 0 {
-        return Ok(push_task(db, task)?);
     } else if task_index == num_tasks - 1 {
-        return Ok(pushback_task(db, task)?);
+        return Ok(push_task(db, task)?);
     }
 
-    // sqlite starts rows from 1
-    let task_index = task_index + 1;
-    // task is not last, we are good to go.
-    let task_order: i64 = db.query_row("SELECT task_order + 1 FROM (SELECT row_number() OVER (ORDER BY task_order) task_index, task_order FROM tasks) WHERE task_index = :task_index", 
-    named_params! {":task_index": task_index}, |row| row.get(0))?;
-    let xact = db.transaction()?;
-    xact.execute("UPDATE tasks SET task_order = task_order + 1 WHERE task_order >= :task_order AND stack_id = :stack_id", named_params! {":task_order": task_order, ":stack_id": current_stack_id})?;
-    xact.execute("INSERT INTO tasks(task, task_order, stack_id) VALUES (:task, :task_order, :stack_id)", named_params! {":task": task, ":task_order": task_order, ":stack_id": current_stack_id})?;
-    xact.commit()?;
+    assert!(num_tasks > 1);
+    let task_id = task_index_to_task_id(db, current_stack_id, task_index)?;
+    let task_order: f64 = db.query_row("SELECT task_order FROM tasks WHERE id = ?", params![task_id], |row| row.get(0))?;
+    let task_orders = {
+        let mut task_order_query = db.prepare("SELECT task_order FROM tasks WHERE stack_id = ? AND task_order >= ? ORDER BY task_order ASC LIMIT 2")?;
+        let task_orders = task_order_query.query_map(params![current_stack_id, task_order], |row| row.get(0))?.collect::<Result<Vec<f64>, _>>()?;
+        task_orders
+    };
+    assert!(task_orders.len() == 2);
+    let mut new_order = 0.;
+    for o in &task_orders {
+        new_order += o;
+    }
+    new_order /= task_orders.len() as f64;
+    let new_order = new_order;
+    db.execute("INSERT INTO tasks(task, task_order, stack_id) VALUES (?, ?, ?)", params![task, new_order, current_stack_id])?;
+
     Ok(())
 }
 

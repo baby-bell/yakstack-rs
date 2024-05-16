@@ -28,20 +28,21 @@ fn main() {
 
 /// All possible commands. Used for prefix matching.
 static COMMANDS: &[&str] = &[
-    "push",
+    "add",
     "backpush",
-    "pop",
-    "kill",
-    "ls",
-    "swap",
     "clear",
     "clearall",
-    "newstack",
-    "switchto",
     "dropstack",
+    "insertafter",
+    "kill",
     "liststacks",
+    "ls",
+    "newstack",
+    "pop",
+    "remindme",
+    "swap",
+    "switchto",
     "triggerreminder",
-    "remindme"
 ];
 
 #[derive(Parser)]
@@ -54,7 +55,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Push a task onto the stack
-    Push {
+    Add {
         /// Task text to use
         task: String,
     },
@@ -63,45 +64,36 @@ enum Command {
         /// Task description
         task: String,
     },
-    /// Pop a task from the top of the stack
-    Pop {
-        /// Name of the stack to push onto
-        name: Option<String>,
-    },
-    /// List all tasks on the current stack.
-    Ls,
-    /// Swap two tasks
-    Swap {
-        task1: TaskIndex,
-        task2: TaskIndex,
-    },
     /// Clear all tasks on the current stack.
     Clear,
     /// Wipe all stacks clean.
     Clearall,
-    /// Create a new stack
-    Newstack {
-        /// Name of the new stack. Must not be the same as an existing stack's name!
-        name: String,
+    /// Delete a stack and all its items.
+    Dropstack {
+        stack: String,
+    },
+    /// Insert a task after another task in the stack.
+    Insertafter {
+        task: String,
+        after: TaskIndex,
     },
     /// Delete a task.
     Kill {
         task: TaskIndex,
     },
-    /// Switch to another stack.
-    Switchto {
-        /// Stack to switch to. Must exist.
-        stack: String,
-    },
-    /// Delete a stack and all its items.
-    Dropstack {
-        stack: String,
-    },
     /// List all stacks.
     Liststacks,
-    /// Trigger a previously-created reminder.
-    Triggerreminder {
-        reminder_id: String,
+    /// List all tasks on the current stack.
+    Ls,
+    /// Create a new stack
+    Newstack {
+        /// Name of the new stack. Must not be the same as an existing stack's name!
+        name: String,
+    },
+    /// Pop a task from the top of the stack
+    Pop {
+        /// Name of the stack to push onto
+        name: Option<String>,
     },
     /// Create a task reminder at some future point in time.
     Remindme {
@@ -109,7 +101,21 @@ enum Command {
         task: TaskIndex,
         /// How long to wait. Specified as ([1-9][0-9]*h)?([1-9][0-9]*m)?([1-9][0-9]*s)?
         delay: String,
-    }
+    },
+    /// Swap two tasks
+    Swap {
+        task1: TaskIndex,
+        task2: TaskIndex,
+    },
+    /// Switch to another stack.
+    Switchto {
+        /// Stack to switch to. Must exist.
+        stack: String,
+    },
+    /// Trigger a previously-created reminder.
+    Triggerreminder {
+        reminder_id: String,
+    },
 }
 
 
@@ -134,7 +140,7 @@ fn app_main() -> Result<(), Box<dyn StdError>> {
         init_db(&mut conn)?;
     }
     match cli.command {
-        Command::Push { task }=> {
+        Command::Add { task }=> {
             push_task(&conn, task)?;
         },
         Command::Backpush { task }=> {
@@ -170,6 +176,7 @@ fn app_main() -> Result<(), Box<dyn StdError>> {
         }
         Command::Remindme { task, delay }=> remind_me(&mut conn, task, delay)?,
         Command::Triggerreminder { reminder_id }=> trigger_reminder(db_path, conn, reminder_id)?,
+        Command::Insertafter { task, after } => insert_after(&mut conn, after, task)?,
     }
     Ok(())
 }
@@ -202,6 +209,7 @@ fn resolve_command(prefix: &str) -> Result<&str, CommandError>  {
     }
 }
 
+#[cfg(test)]
 mod tests {
     use crate::resolve_command;
     use crate::errors::CommandError;
@@ -228,11 +236,11 @@ fn is_db_initialized(db: &Connection) -> bool {
 fn init_db(db: &mut Connection) -> AppResult<()> {
     let xact = db.transaction()?;
     xact.execute("PRAGMA foreign_keys = ON", [])?;
-    xact.execute("CREATE TABLE IF NOT EXISTS stacks(id INTEGER PRIMARY KEY, name TEXT NOT NULL, UNIQUE(name))", [])?;
-    xact.execute("CREATE TABLE IF NOT EXISTS app_state(stack_id INTEGER NOT NULL, FOREIGN KEY(stack_id) REFERENCES stacks(id))", [])?;
-    xact.execute("CREATE TABLE IF NOT EXISTS tasks(task TEXT NOT NULL, task_order INTEGER NOT NULL, id INTEGER PRIMARY KEY, stack_id INTEGER NOT NULL, FOREIGN KEY(stack_id) REFERENCES stacks(id), CHECK (task_order = task_order))", [])?;
+    xact.execute("CREATE TABLE IF NOT EXISTS stacks(id INTEGER PRIMARY KEY, name TEXT NOT NULL, UNIQUE(name)) STRICT", [])?;
+    xact.execute("CREATE TABLE IF NOT EXISTS app_state(id INTEGER PRIMARY KEY, stack_id INTEGER NOT NULL, FOREIGN KEY(stack_id) REFERENCES stacks(id), CHECK (id = 1)) STRICT", [])?;
+    xact.execute("CREATE TABLE IF NOT EXISTS tasks(task TEXT NOT NULL, task_order REAL NOT NULL, id INTEGER PRIMARY KEY, stack_id INTEGER NOT NULL, FOREIGN KEY(stack_id) REFERENCES stacks(id), CHECK (task_order = task_order)) STRICT", [])?;
     // reminders PK should be a UUID
-    xact.execute("CREATE TABLE IF NOT EXISTS reminders(id TEXT PRIMARY KEY, delay INTEGER NOT NULL, task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, CHECK (delay > 0))", [])?;
+    xact.execute("CREATE TABLE IF NOT EXISTS reminders(id TEXT PRIMARY KEY, delay INTEGER NOT NULL, task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, CHECK (delay > 0)) STRICT", [])?;
     xact.execute("CREATE INDEX IF NOT EXISTS tasks_ix ON tasks(stack_id, task_order, task)", [])?;
     xact.execute("INSERT INTO stacks(id, name) VALUES (?, 'default')", params![DEFAULT_STACK_ID])?;
     xact.execute("INSERT INTO app_state(stack_id) VALUES (?)", params![DEFAULT_STACK_ID])?;
