@@ -46,7 +46,7 @@ static COMMANDS: &[&str] = &[
 ];
 
 #[derive(Parser)]
-#[command(version = "0.3.2", about = "Stack-based task tracker", long_about = None)]
+#[command(version = "0.4.0", about = "Stack-based task tracker", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Command
