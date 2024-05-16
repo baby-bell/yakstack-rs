@@ -296,7 +296,7 @@ pub fn trigger_reminder(db_path: PathBuf, db: Connection, reminder_id: String) -
     Notification::new()
         .summary("Task Reminder")
         .body(&task)
-        .timeout(10_000)
+        .timeout(Duration::from_secs(10))
         .show()
         .expect("Failed to show notification");
     Ok(())
